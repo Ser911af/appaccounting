@@ -22,8 +22,19 @@ if uploaded_file:
         else:
             # Convertir 'Fecha Emisión' a formato de fecha
             df["Fecha Emisión"] = pd.to_datetime(df["Fecha Emisión"], format='%d-%m-%Y', errors="coerce")
-            if df["Fecha Emisión"].isnull().any():
-                st.warning("Algunas fechas no pudieron ser convertidas correctamente.")
+            invalid_dates = df["Fecha Emisión"].isnull().sum()
+            if invalid_dates > 0:
+                st.warning(f"Se encontraron {invalid_dates} fechas mal formateadas que fueron ignoradas.")
+            else:
+                st.success("Todas las fechas fueron convertidas correctamente.")
+
+            # Asegurarse de que las columnas 'Total' e 'IVA' son numéricas
+            df["Total"] = pd.to_numeric(df["Total"], errors='coerce')
+            df["IVA"] = pd.to_numeric(df["IVA"], errors='coerce')
+
+            # Comprobar si hay valores nulos o inválidos
+            if df["Total"].isnull().any() or df["IVA"].isnull().any():
+                st.warning("Algunos valores de 'Total' o 'IVA' no son válidos y se han marcado como NaN.")
 
             # Crear columna 'Base' redondeando a enteros
             df["Base"] = (df["Total"].fillna(0) - df["IVA"].fillna(0)).round(0)
@@ -59,14 +70,14 @@ if uploaded_file:
                     )
 
                     # Calcular total anual
-                    total = suma_por_mes.sum()
+                    total_anual = suma_por_mes.sum()
 
                     # Crear fila de resultados
-                    fila = [tipo_doc, grado] + list(suma_por_mes.values) + [total]
+                    fila = [tipo_doc, grado] + list(suma_por_mes.values) + [total_anual]
                     tabla_resultados.append(fila)
 
             # Crear DataFrame con la tabla consolidada
-            columnas = ["Tipo Doc", "Grado"] + meses_orden + ["Total"]
+            columnas = ["Tipo Doc", "Grado"] + meses_orden + ["Total Anual"]
             tabla_df = pd.DataFrame(tabla_resultados, columns=columnas)
 
             # Redondear valores a enteros
