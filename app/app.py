@@ -25,8 +25,8 @@ if uploaded_file:
             if df["Fecha Emisión"].isnull().any():
                 st.warning("Algunas fechas no pudieron ser convertidas correctamente.")
 
-            # Crear columna 'Base' manejando nulos
-            df["Base"] = df["Total"].fillna(0) - df["IVA"].fillna(0)
+            # Crear columna 'Base' redondeando a enteros
+            df["Base"] = (df["Total"].fillna(0) - df["IVA"].fillna(0)).round(0)
 
             # Extraer el nombre del mes de forma manual
             month_mapping = {
@@ -69,6 +69,9 @@ if uploaded_file:
             columnas = ["Tipo Doc", "Grado"] + meses_orden + ["Total"]
             tabla_df = pd.DataFrame(tabla_resultados, columns=columnas)
 
+            # Redondear valores a enteros
+            tabla_df = tabla_df.round(0)
+
             # Mostrar tabla en la aplicación
             st.markdown("### Tabla consolidada:")
             st.dataframe(tabla_df)
@@ -93,4 +96,3 @@ if uploaded_file:
         st.error(f"Error procesando el archivo: {e}")
 else:
     st.write("Por favor, sube un archivo Excel para comenzar el análisis.")
-
