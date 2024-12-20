@@ -89,43 +89,54 @@ if uploaded_file:
             st.markdown("### Tabla consolidada:")
             st.dataframe(tabla_df)
 
-            # Generar gráficos de barras por tipo de documento
+            # Crear gráficos de barras por tipo de documento
             st.markdown("### Gráficos de barras: porcentaje relativo del valor por tipo de documento")
 
+            # Lista de gráficos que se mostrarán
+            all_figures = []
+            for tipo_doc in tipo_documentos:
+                for grado in grados:
+                    # Filtrar los datos para el gráfico
+                    df_filtro = tabla_df[(tabla_df["Tipo Doc"] == tipo_doc) & (tabla_df["Grado"] == grado)]
+                    total_anual = df_filtro["Total Anual"].values[0]
+                    
+                    # Calcular el porcentaje de cada mes respecto al total anual
+                    porcentajes = (df_filtro[meses_orden].values.flatten() / total_anual) * 100
+                    
+                    # Crear el gráfico de barras
+                    fig, ax = plt.subplots(figsize=(10, 6))
+                    ax.bar(meses_orden, porcentajes, color='skyblue')
+                    ax.set_title(f"{tipo_doc} - {grado}", fontsize=14)
+                    ax.set_xlabel("Mes", fontsize=12)
+                    ax.set_ylabel("Porcentaje (%)", fontsize=12)
+                    ax.set_ylim(0, 100)
+                    ax.set_xticklabels(meses_orden, rotation=45)
+                    
+                    # Mostrar el gráfico en la aplicación
+                    st.pyplot(fig)
+
+                    # Añadir el gráfico a la lista de figuras para el PDF
+                    all_figures.append(fig)
+
             # Crear un PDF para guardar los gráficos
-            pdf_output = BytesIO()
-            with PdfPages(pdf_output) as pdf:
-                for tipo_doc in tipo_documentos:
-                    for grado in grados:
-                        # Filtrar los datos para el gráfico
-                        df_filtro = tabla_df[(tabla_df["Tipo Doc"] == tipo_doc) & (tabla_df["Grado"] == grado)]
-                        total_anual = df_filtro["Total Anual"].values[0]
-                        
-                        # Calcular el porcentaje de cada mes respecto al total anual
-                        porcentajes = (df_filtro[meses_orden].values.flatten() / total_anual) * 100
-                        
-                        # Crear el gráfico de barras
-                        fig, ax = plt.subplots(figsize=(10, 6))
-                        ax.bar(meses_orden, porcentajes, color='skyblue')
-                        ax.set_title(f"{tipo_doc} - {grado}", fontsize=14)
-                        ax.set_xlabel("Mes", fontsize=12)
-                        ax.set_ylabel("Porcentaje (%)", fontsize=12)
-                        ax.set_ylim(0, 100)
-                        ax.set_xticklabels(meses_orden, rotation=45)
-                        
-                        # Añadir el gráfico al archivo PDF
+            def crear_pdf(figures):
+                pdf_output = BytesIO()
+                with PdfPages(pdf_output) as pdf:
+                    for fig in figures:
                         pdf.savefig(fig)
                         plt.close(fig)
+                return pdf_output.getvalue()
 
-            # Guardar el PDF y ofrecerlo como descarga
-            pdf_data = pdf_output.getvalue()
-
-            st.download_button(
-                label="Descargar gráficos en PDF",
-                data=pdf_data,
-                file_name="gráficos_dian.pdf",
-                mime="application/pdf"
-            )
+            # Botón para descargar el PDF de los gráficos
+            st.markdown("### Descargar gráficos en PDF")
+            if st.button("Descargar PDF"):
+                pdf_data = crear_pdf(all_figures)
+                st.download_button(
+                    label="Descargar gráficos en PDF",
+                    data=pdf_data,
+                    file_name="gráficos_dian.pdf",
+                    mime="application/pdf"
+                )
 
             # Generar archivo Excel para descargar
             @st.cache_data
