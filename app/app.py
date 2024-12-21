@@ -95,28 +95,34 @@ if uploaded_file:
             # Lista de gráficos que se mostrarán
             all_figures = []
             for tipo_doc in tipo_documentos:
-                for grado in grados:
+                fig, axes = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
+                fig.suptitle(f"Porcentaje relativo de {tipo_doc}", fontsize=16)
+
+                for ax, grado in zip(axes, grados):
                     # Filtrar los datos para el gráfico
                     df_filtro = tabla_df[(tabla_df["Tipo Doc"] == tipo_doc) & (tabla_df["Grado"] == grado)]
                     total_anual = df_filtro["Total Anual"].values[0]
-                    
+
                     # Calcular el porcentaje de cada mes respecto al total anual
                     porcentajes = (df_filtro[meses_orden].values.flatten() / total_anual) * 100
-                    
+
                     # Crear el gráfico de barras
-                    fig, ax = plt.subplots(figsize=(10, 6))
-                    ax.bar(meses_orden, porcentajes, color='skyblue')
-                    ax.set_title(f"{tipo_doc} - {grado}", fontsize=14)
+                    ax.bar(meses_orden, porcentajes, color='skyblue', width=0.6)
+                    ax.set_title(grado, fontsize=14)
                     ax.set_xlabel("Mes", fontsize=12)
                     ax.set_ylabel("Porcentaje (%)", fontsize=12)
                     ax.set_ylim(0, 100)
                     ax.set_xticklabels(meses_orden, rotation=45)
-                    
-                    # Mostrar el gráfico en la aplicación
-                    st.pyplot(fig)
 
-                    # Añadir el gráfico a la lista de figuras para el PDF
-                    all_figures.append(fig)
+                    # Agregar etiquetas a las barras
+                    for i, porcentaje in enumerate(porcentajes):
+                        ax.text(i, porcentaje + 1, f"{porcentaje:.1f}%", ha='center', va='bottom', fontsize=10)
+
+                # Mostrar el gráfico en la aplicación
+                st.pyplot(fig)
+
+                # Añadir el gráfico a la lista de figuras para el PDF
+                all_figures.append(fig)
 
             # Crear un PDF para guardar los gráficos
             def crear_pdf(figures):
@@ -129,14 +135,13 @@ if uploaded_file:
 
             # Botón para descargar el PDF de los gráficos
             st.markdown("### Descargar gráficos en PDF")
-            if st.button("Descargar PDF"):
-                pdf_data = crear_pdf(all_figures)
-                st.download_button(
-                    label="Descargar gráficos en PDF",
-                    data=pdf_data,
-                    file_name="gráficos_dian.pdf",
-                    mime="application/pdf"
-                )
+            pdf_data = crear_pdf(all_figures)
+            st.download_button(
+                label="Descargar gráficos en PDF",
+                data=pdf_data,
+                file_name="gráficos_dian.pdf",
+                mime="application/pdf"
+            )
 
             # Generar archivo Excel para descargar
             @st.cache_data
@@ -159,3 +164,4 @@ if uploaded_file:
         st.error(f"Error procesando el archivo: {e}")
 else:
     st.write("Por favor, sube un archivo Excel para comenzar el análisis.")
+
