@@ -2,9 +2,9 @@ import pandas as pd
 import streamlit as st
 import matplotlib.pyplot as plt
 from io import BytesIO
-from matplotlib.backends.backend_pdf import PdfPages
 from openpyxl import Workbook
 from openpyxl.utils.dataframe import dataframe_to_rows
+from openpyxl.chart import BarChart, Reference
 
 # Configurar nombres de los meses en español
 month_mapping = {
@@ -62,42 +62,42 @@ if uploaded_file:
             st.markdown("### Tabla consolidada:")
             st.dataframe(tabla_df)
 
-            # Crear gráficos de barras
-            st.markdown("### Gráficos de barras:")
-            all_figures = []
-            for tipo_doc in tipo_documentos:
-                fig, axes = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
-                fig.suptitle(f"Porcentaje relativo de {tipo_doc}", fontsize=16)
-                for ax, grado in zip(axes, grados):
-                    df_filtro = tabla_df[(tabla_df["Tipo Doc"] == tipo_doc) & (tabla_df["Grado"] == grado)]
-                    total_anual = df_filtro["Total Anual"].values[0]
-                    porcentajes = (df_filtro[list(month_mapping.values())].values.flatten() / total_anual) * 100
-                    ax.bar(month_mapping.values(), porcentajes, color='skyblue', width=0.6)
-                    ax.set_title(grado, fontsize=14)
-                    ax.set_xlabel("Mes", fontsize=12)
-                    ax.set_ylabel("Porcentaje (%)", fontsize=12)
-                    ax.set_ylim(0, 100)
-                    ax.set_xticklabels(month_mapping.values(), rotation=45)
-                    for i, porcentaje in enumerate(porcentajes):
-                        ax.text(i, porcentaje + 1, f"{porcentaje:.1f}%", ha='center', va='bottom', fontsize=10)
-                st.pyplot(fig)
-                all_figures.append(fig)
-
-            # Descargar Excel con tabla y gráficos
-            def generar_excel(tabla_df):
+            # Crear gráficos en Excel
+            def generar_excel_con_graficos(tabla_df):
                 output = BytesIO()
                 wb = Workbook()
                 ws = wb.active
                 ws.title = "Resultados"
+                
+                # Escribir la tabla consolidada en el Excel
                 for row in dataframe_to_rows(tabla_df, index=False, header=True):
                     ws.append(row)
+                
+                # Crear gráficos de barras para cada tipo de documento
+                for i, tipo_doc in enumerate(tipo_documentos, start=1):
+                    chart = BarChart()
+                    chart.title = f"Porcentaje relativo de {tipo_doc}"
+                    chart.style = 11
+                    chart.y_axis.title = "Base"
+                    chart.x_axis.title = "Mes"
+
+                    # Referencias para el gráfico
+                    data = Reference(ws, min_col=3, max_col=14, min_row=2 + (i - 1) * 2, max_row=2 + (i - 1) * 2)
+                    categories = Reference(ws, min_col=3, max_col=14, min_row=1)
+                    chart.add_data(data, titles_from_data=False)
+                    chart.set_categories(categories)
+
+                    # Posición del gráfico
+                    ws.add_chart(chart, f"N{10 * i}")
+
+                # Guardar el archivo Excel
                 wb.save(output)
                 return output.getvalue()
 
-            st.markdown("### Descargar consolidado:")
-            excel_data = generar_excel(tabla_df)
+            # Generar el archivo Excel
+            excel_data = generar_excel_con_graficos(tabla_df)
             st.download_button(
-                label="Descargar Excel",
+                label="Descargar Excel con gráficos",
                 data=excel_data,
                 file_name="consolidado_dian.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
