@@ -1,169 +1,128 @@
-import pandas as pd
 import streamlit as st
-import matplotlib.pyplot as plt
-from io import BytesIO
-from matplotlib.backends.backend_pdf import PdfPages
+import time
+from groq import Groq
+from typing import Generator
+from reportlab.lib.pagesizes import letter
+from reportlab.pdfgen import canvas
+import pandas as pd
 
 # Título de la aplicación
-st.title("DIAN Report Analyzer")
-st.subheader("Carga tu reporte DIAN y obtén un análisis detallado del archivo")
+st.title("Groq Sergio Bot")
 
-# Subida del archivo
+# Declaramos el cliente de Groq
+client = Groq(
+    api_key=st.secrets["ngroqAPIKey"],  # Cargamos la API key del .streamlit/secrets.toml
+)
+
+# Lista de modelos para elegir
+modelos = ['llama3-8b-8192', 'llama3-70b-8192', 'mixtral-8x7b-32768']
+
+def generate_chat_responses(chat_completion) -> Generator[str, None, None]:
+    """ Genera respuestas de chat mostrando caracter por caracter. """
+    for chunk in chat_completion:
+        if chunk.choices[0].delta.content:
+            yield chunk.choices[0].delta.content
+
+# Función para generar un PDF con el contenido del informe
+def create_pdf(report_content):
+    pdf_filename = "/tmp/Informe_Analisis.pdf"
+    c = canvas.Canvas(pdf_filename, pagesize=letter)
+    c.drawString(100, 750, report_content)
+    c.save()
+    return pdf_filename
+
+# Inicializamos el historial de chat
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+
+# Muestra mensajes de chat desde la historia en la aplicación
+with st.container():
+    for message in st.session_state.messages:
+        with st.chat_message(message["role"]):
+            st.markdown(message["content"])
+
+# Mostramos la lista de modelos en el sidebar
+parModelo = st.sidebar.selectbox('Modelos', options=modelos, index=0)
+
+# Botón para cargar los datos de análisis
 uploaded_file = st.file_uploader("Sube tu archivo Excel", type=["xlsx"])
 
 if uploaded_file:
-    try:
-        # Leer el archivo Excel
-        df = pd.read_excel(uploaded_file)
+    df = pd.read_excel(uploaded_file)
 
-        # Validar columnas necesarias
-        required_columns = ["Fecha Emisión", "Total", "IVA", "Tipo de documento", "Grupo"]
-        missing_columns = [col for col in required_columns if col not in df.columns]
-        if missing_columns:
-            st.error(f"El archivo no contiene las columnas requeridas: {', '.join(missing_columns)}")
-        else:
-            # Convertir 'Fecha Emisión' a formato de fecha
-            df["Fecha Emisión"] = pd.to_datetime(df["Fecha Emisión"], format='%d-%m-%Y', errors="coerce")
-            invalid_dates = df["Fecha Emisión"].isnull().sum()
-            if invalid_dates > 0:
-                st.warning(f"Se encontraron {invalid_dates} fechas mal formateadas que fueron ignoradas.")
-            else:
-                st.success("Todas las fechas fueron convertidas correctamente.")
+    # Procesar el DataFrame, crear la tabla y generar un resumen de la tabla
+    required_columns = ["Fecha Emisión", "Total", "IVA", "Tipo de documento", "Grupo"]
+    missing_columns = [col for col in required_columns if col not in df.columns]
+    if missing_columns:
+        st.error(f"El archivo no contiene las columnas requeridas: {', '.join(missing_columns)}")
+    else:
+        df["Fecha Emisión"] = pd.to_datetime(df["Fecha Emisión"], format='%d-%m-%Y', errors="coerce")
+        df["Total"] = pd.to_numeric(df["Total"], errors='coerce')
+        df["IVA"] = pd.to_numeric(df["IVA"], errors='coerce')
+        df["Base"] = (df["Total"].fillna(0) - df["IVA"].fillna(0)).round(0)
 
-            # Asegurarse de que las columnas 'Total' e 'IVA' son numéricas
-            df["Total"] = pd.to_numeric(df["Total"], errors='coerce')
-            df["IVA"] = pd.to_numeric(df["IVA"], errors='coerce')
+        # Crear la tabla consolidada (igual que antes)
+        month_mapping = {
+            1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril", 5: "Mayo", 6: "Junio",
+            7: "Julio", 8: "Agosto", 9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
+        }
+        df["Mes"] = df["Fecha Emisión"].dt.month.map(month_mapping)
+        meses_orden = list(month_mapping.values())
 
-            # Comprobar si hay valores nulos o inválidos
-            if df["Total"].isnull().any() or df["IVA"].isnull().any():
-                st.warning("Algunos valores de 'Total' o 'IVA' no son válidos y se han marcado como NaN.")
+        # Crear la tabla consolidada
+        tipo_documentos = df["Tipo de documento"].unique()
+        grados = ["Emitido", "Recibido"]
+        tabla_resultados = []
 
-            # Crear columna 'Base' redondeando a enteros
-            df["Base"] = (df["Total"].fillna(0) - df["IVA"].fillna(0)).round(0)
+        for tipo_doc in tipo_documentos:
+            for grado in grados:
+                df_filtro = df[(df["Tipo de documento"] == tipo_doc) & (df["Grupo"] == grado)]
+                suma_por_mes = df_filtro.groupby("Mes")["Base"].sum().reindex(meses_orden, fill_value=0)
+                total_anual = suma_por_mes.sum()
+                fila = [tipo_doc, grado] + list(suma_por_mes.values) + [total_anual]
+                tabla_resultados.append(fila)
 
-            # Diccionario de meses en español
-            month_mapping = {
-                1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
-                5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
-                9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
-            }
-            df["Mes"] = df["Fecha Emisión"].dt.month.map(month_mapping)
+        tabla_df = pd.DataFrame(tabla_resultados, columns=["Tipo Doc", "Grado"] + meses_orden + ["Total Anual"])
+        tabla_resumen = tabla_df.describe().to_string()
 
-            # Ordenar meses correctamente
-            meses_orden = list(month_mapping.values())
-            df["Mes"] = pd.Categorical(df["Mes"], categories=meses_orden, ordered=True)
+        st.dataframe(tabla_df)
+        st.markdown("### Resumen de la tabla:")
+        st.text(tabla_resumen)
 
-            # Obtener valores únicos de 'Tipo de documento' y 'Grupo'
-            tipo_documentos = df["Tipo de documento"].unique()
-            grados = ["Emitido", "Recibido"]
+        # Botón para enviar la solicitud al modelo
+        prompt = f"""
+        Genera un informe detallado basado en los siguientes datos de facturación:
+        {tabla_resumen}
+        El informe debe incluir:
+        - Análisis de los meses con mayores y menores ingresos.
+        - Observaciones sobre tendencias.
+        - Recomendaciones basadas en los datos presentados.
+        """
 
-            # Crear tabla consolidada
-            tabla_resultados = []
+        # Generar respuesta del modelo
+        if prompt:
+            st.chat_message("user").markdown(prompt)
+            st.session_state.messages.append({"role": "user", "content": prompt})
+            try:
+                with st.spinner('Generando informe...'):
+                    chat_completion = client.chat.completions.create(
+                        model=parModelo,
+                        messages=[{"role": m["role"], "content": m["content"]} for m in st.session_state.messages],
+                        stream=True
+                    )
+                    chat_responses_generator = generate_chat_responses(chat_completion)
+                    full_response = ''.join(list(chat_responses_generator))
+                    st.chat_message("assistant").markdown(full_response)
+                    st.session_state.messages.append({"role": "assistant", "content": full_response})
 
-            for tipo_doc in tipo_documentos:
-                for grado in grados:
-                    # Filtrar datos por 'Tipo de documento' y 'Grupo'
-                    df_filtro = df[(df["Tipo de documento"] == tipo_doc) & (df["Grupo"] == grado)]
-
-                    # Sumar 'Base' por mes
-                    suma_por_mes = (
-                        df_filtro.groupby("Mes")["Base"].sum()
-                        .reindex(meses_orden, fill_value=0)
+                    # Crear y descargar el PDF
+                    pdf_filename = create_pdf(full_response)
+                    st.download_button(
+                        label="Descargar Informe en PDF",
+                        data=open(pdf_filename, "rb").read(),
+                        file_name="Informe_Analisis.pdf",
+                        mime="application/pdf"
                     )
 
-                    # Calcular total anual
-                    total_anual = suma_por_mes.sum()
-
-                    # Crear fila de resultados
-                    fila = [tipo_doc, grado] + list(suma_por_mes.values) + [total_anual]
-                    tabla_resultados.append(fila)
-
-            # Crear DataFrame con la tabla consolidada
-            columnas = ["Tipo Doc", "Grado"] + meses_orden + ["Total Anual"]
-            tabla_df = pd.DataFrame(tabla_resultados, columns=columnas)
-
-            # Redondear valores a enteros
-            tabla_df = tabla_df.round(0)
-
-            # Mostrar tabla en la aplicación
-            st.markdown("### Tabla consolidada:")
-            st.dataframe(tabla_df)
-
-            # Crear gráficos de barras por tipo de documento
-            st.markdown("### Gráficos de barras: porcentaje relativo del valor por tipo de documento")
-
-            # Lista de gráficos que se mostrarán
-            all_figures = []
-            for tipo_doc in tipo_documentos:
-                fig, axes = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
-                fig.suptitle(f"Porcentaje relativo de {tipo_doc}", fontsize=16)
-
-                for ax, grado in zip(axes, grados):
-                    # Filtrar los datos para el gráfico
-                    df_filtro = tabla_df[(tabla_df["Tipo Doc"] == tipo_doc) & (tabla_df["Grado"] == grado)]
-                    total_anual = df_filtro["Total Anual"].values[0]
-
-                    # Filtrar meses con totales mayores a 0
-                    meses_validos = [mes for mes, valor in zip(meses_orden, df_filtro[meses_orden].values.flatten()) if valor > 0]
-                    valores_validos = [valor for valor in df_filtro[meses_orden].values.flatten() if valor > 0]
-
-                    # Crear el gráfico de barras si hay valores válidos
-                    if valores_validos:
-                        porcentajes = (pd.Series(valores_validos) / total_anual) * 100
-                        ax.bar(meses_validos, porcentajes, color='skyblue', width=0.6)
-                        ax.set_title(grado, fontsize=14)
-                        ax.set_xlabel("Mes", fontsize=12)
-                        ax.set_ylabel("Porcentaje (%)", fontsize=12)
-                        ax.set_ylim(0, 100)
-                        ax.set_xticklabels(meses_validos, rotation=45)
-
-                        # Agregar etiquetas a las barras
-                        for i, porcentaje in enumerate(porcentajes):
-                            ax.text(i, porcentaje + 1, f"{porcentaje:.1f}%", ha='center', va='bottom', fontsize=10)
-
-                # Mostrar el gráfico en la aplicación
-                st.pyplot(fig)
-
-                # Añadir el gráfico a la lista de figuras para el PDF
-                all_figures.append(fig)
-
-            # Crear un PDF para guardar los gráficos
-            def crear_pdf(figures):
-                pdf_output = BytesIO()
-                with PdfPages(pdf_output) as pdf:
-                    for fig in figures:
-                        pdf.savefig(fig)
-                        plt.close(fig)
-                return pdf_output.getvalue()
-
-            # Botón para descargar el PDF de los gráficos
-            st.markdown("### Descargar gráficos en PDF")
-            pdf_data = crear_pdf(all_figures)
-            st.download_button(
-                label="Descargar gráficos en PDF",
-                data=pdf_data,
-                file_name="gráficos_dian.pdf",
-                mime="application/pdf"
-            )
-
-            # Generar archivo Excel para descargar
-            @st.cache_data
-            def convertir_a_excel(dataframe):
-                output = BytesIO()
-                with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                    dataframe.to_excel(writer, index=False, sheet_name="Resultados")
-                return output.getvalue()
-
-            # Archivo para descargar
-            excel_data = convertir_a_excel(tabla_df)
-            st.download_button(
-                label="Descargar tabla consolidada en Excel",
-                data=excel_data,
-                file_name="analisis_dian.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-
-    except Exception as e:
-        st.error(f"Error procesando el archivo: {e}")
-else:
-    st.write("Por favor, sube un archivo Excel para comenzar el análisis.")
+            except Exception as e:
+                st.error(e)
