@@ -3,9 +3,6 @@ import streamlit as st
 import matplotlib.pyplot as plt
 from io import BytesIO
 from matplotlib.backends.backend_pdf import PdfPages
-from openpyxl import Workbook
-from openpyxl.drawing.image import Image
-from openpyxl.utils.dataframe import dataframe_to_rows
 
 # Título de la aplicación
 st.title("DIAN Report Analyzer")
@@ -44,11 +41,11 @@ if uploaded_file:
             # Crear columna 'Base' redondeando a enteros
             df["Base"] = (df["Total"].fillna(0) - df["IVA"].fillna(0)).round(0)
 
-            # Extraer el nombre del mes de forma manual
+            # Diccionario de meses en español
             month_mapping = {
-                1: "January", 2: "February", 3: "March", 4: "April",
-                5: "May", 6: "June", 7: "July", 8: "August",
-                9: "September", 10: "October", 11: "November", 12: "December"
+                1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
+                5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
+                9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
             }
             df["Mes"] = df["Fecha Emisión"].dt.month.map(month_mapping)
 
@@ -106,25 +103,23 @@ if uploaded_file:
                     df_filtro = tabla_df[(tabla_df["Tipo Doc"] == tipo_doc) & (tabla_df["Grado"] == grado)]
                     total_anual = df_filtro["Total Anual"].values[0]
 
-                    # Omitir gráficos si el total anual es 0
-                    if total_anual == 0:
-                        continue
+                    # Filtrar meses con totales mayores a 0
+                    meses_validos = [mes for mes, valor in zip(meses_orden, df_filtro[meses_orden].values.flatten()) if valor > 0]
+                    valores_validos = [valor for valor in df_filtro[meses_orden].values.flatten() if valor > 0]
 
-                    # Calcular el porcentaje de cada mes respecto al total anual
-                    porcentajes = (df_filtro[meses_orden].values.flatten() / total_anual) * 100
+                    # Crear el gráfico de barras si hay valores válidos
+                    if valores_validos:
+                        porcentajes = (pd.Series(valores_validos) / total_anual) * 100
+                        ax.bar(meses_validos, porcentajes, color='skyblue', width=0.6)
+                        ax.set_title(grado, fontsize=14)
+                        ax.set_xlabel("Mes", fontsize=12)
+                        ax.set_ylabel("Porcentaje (%)", fontsize=12)
+                        ax.set_ylim(0, 100)
+                        ax.set_xticklabels(meses_validos, rotation=45)
 
-                    # Crear el gráfico de barras
-                    ax.bar(meses_orden, porcentajes, color='skyblue', width=0.6)
-                    ax.set_title(grado, fontsize=14)
-                    ax.set_xlabel("Mes", fontsize=12)
-                    ax.set_ylabel("Porcentaje (%)", fontsize=12)
-                    ax.set_ylim(0, 100)
-                    ax.set_xticks(range(len(meses_orden)))
-                    ax.set_xticklabels(meses_orden, rotation=45, ha='right')
-
-                    # Agregar etiquetas a las barras
-                    for i, porcentaje in enumerate(porcentajes):
-                        ax.text(i, porcentaje + 1, f"{porcentaje:.1f}%", ha='center', va='bottom', fontsize=10)
+                        # Agregar etiquetas a las barras
+                        for i, porcentaje in enumerate(porcentajes):
+                            ax.text(i, porcentaje + 1, f"{porcentaje:.1f}%", ha='center', va='bottom', fontsize=10)
 
                 # Mostrar el gráfico en la aplicación
                 st.pyplot(fig)
@@ -147,7 +142,7 @@ if uploaded_file:
             st.download_button(
                 label="Descargar gráficos en PDF",
                 data=pdf_data,
-                file_name="graficos_dian.pdf",
+                file_name="gráficos_dian.pdf",
                 mime="application/pdf"
             )
 
@@ -155,41 +150,8 @@ if uploaded_file:
             @st.cache_data
             def convertir_a_excel(dataframe):
                 output = BytesIO()
-                wb = Workbook()
-                ws = wb.active
-                ws.title = "Resultados"
-
-                for r_idx, row in enumerate(dataframe_to_rows(dataframe, index=False, header=True), 1):
-                    ws.append(row)
-
-                # Agregar gráficos al Excel
-                for tipo_doc in tipo_documentos:
-                    for grado in grados:
-                        df_filtro = tabla_df[(tabla_df["Tipo Doc"] == tipo_doc) & (tabla_df["Grado"] == grado)]
-                        total_anual = df_filtro["Total Anual"].values[0]
-
-                        if total_anual == 0:
-                            continue
-
-                        porcentajes = (df_filtro[meses_orden].values.flatten() / total_anual) * 100
-                        fig, ax = plt.subplots(figsize=(8, 4))
-                        ax.bar(meses_orden, porcentajes, color='skyblue', width=0.6)
-                        ax.set_title(f"{tipo_doc} - {grado}")
-                        ax.set_xlabel("Mes")
-                        ax.set_ylabel("Porcentaje (%)")
-
-                        for i, porcentaje in enumerate(porcentajes):
-                            ax.text(i, porcentaje + 1, f"{porcentaje:.1f}%", ha='center', va='bottom', fontsize=8)
-
-                        image_stream = BytesIO()
-                        plt.savefig(image_stream, format='png')
-                        plt.close(fig)
-
-                        image_stream.seek(0)
-                        img = Image(image_stream)
-                        ws.add_image(img, f"B{len(ws['A']) + 5}")
-
-                wb.save(output)
+                with pd.ExcelWriter(output, engine="openpyxl") as writer:
+                    dataframe.to_excel(writer, index=False, sheet_name="Resultados")
                 return output.getvalue()
 
             # Archivo para descargar
