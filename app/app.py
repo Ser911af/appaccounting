@@ -7,7 +7,7 @@ from reportlab.pdfgen import canvas
 import pandas as pd
 
 # Título de la aplicación
-st.title("Groq Sergio Bot")
+st.title("DIAN Report Analyzer")
 
 # Declaramos el cliente de Groq
 client = Groq(
