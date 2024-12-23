@@ -1,30 +1,4 @@
 import streamlit as st
-import time
-from groq import Groq
-from typing import Generator
-from reportlab.lib.pagesizes import letter
-from reportlab.pdfgen import canvas
-import pandas as pd
-
-# Título de la aplicación
-st.title("DIAN Report Analyzer")
-
-# Declaramos el cliente de Groq
-client = Groq(
-    api_key=st.secrets["ngroqAPIKey"],  # Cargamos la API key del .streamlit/secrets.toml
-)
-
-# Lista de modelos para elegir
-modelos = ['llama3-8b-8192', 'llama3-70b-8192', 'mixtral-8x7b-32768']
-
-def generate_chat_responses(chat_completion) -> Generator[str, None, None]:
-    """ Genera respuestas de chat mostrando caracter por caracter. """
-    for chunk in chat_completion:
-        if chunk.choices[0].delta.content:
-            yield chunk.choices[0].delta.content
-
-# Función para generar un PDF con el contenidoimport pandas as pd
-import streamlit as st
 import matplotlib.pyplot as plt
 from io import BytesIO
 from matplotlib.backends.backend_pdf import PdfPages
