@@ -22,13 +22,14 @@ if uploaded_file:
         if missing_columns:
             st.error(f"El archivo no contiene las columnas requeridas: {', '.join(missing_columns)}")
         else:
-            # Convertir 'Fecha Emisión' a formato de fecha
+            # Convertir 'Fecha Emisión' a formato de fecha y obtener el nombre del mes
             df["Fecha Emisión"] = pd.to_datetime(df["Fecha Emisión"], format='%d-%m-%Y', errors="coerce")
+            df["Mes"] = df["Fecha Emisión"].dt.month_name(locale='es')
+
+            # Validar fechas mal formateadas
             invalid_dates = df["Fecha Emisión"].isnull().sum()
             if invalid_dates > 0:
                 st.warning(f"Se encontraron {invalid_dates} fechas mal formateadas que fueron ignoradas.")
-            else:
-                st.success("Todas las fechas fueron convertidas correctamente.")
 
             # Asegurarse de que las columnas 'Total' e 'IVA' son numéricas
             df["Total"] = pd.to_numeric(df["Total"], errors='coerce')
@@ -41,127 +42,62 @@ if uploaded_file:
             # Crear columna 'Base' redondeando a enteros
             df["Base"] = (df["Total"].fillna(0) - df["IVA"].fillna(0)).round(0)
 
-            # Diccionario de meses en español
-            month_mapping = {
-                1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
-                5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
-                9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
-            }
-            df["Mes"] = df["Fecha Emisión"].dt.month.map(month_mapping)
+            # Filtrar valores nulos en 'Tipo de documento'
+            df = df.dropna(subset=["Tipo de documento"])
 
-            # Ordenar meses correctamente
-            meses_orden = list(month_mapping.values())
-            df["Mes"] = pd.Categorical(df["Mes"], categories=meses_orden, ordered=True)
-
-            # Obtener valores únicos de 'Tipo de documento' y 'Grupo'
+            # Validar tipos de documentos inesperados
+            expected_docs = {"Factura", "Nota Crédito", "Nota Débito"}
             tipo_documentos = df["Tipo de documento"].unique()
-            grados = ["Emitido", "Recibido"]
+            unexpected_docs = set(tipo_documentos) - expected_docs
+            if unexpected_docs:
+                st.warning(f"Se encontraron tipos de documentos inesperados: {', '.join(unexpected_docs)}")
 
-            # Crear tabla consolidada
-            tabla_resultados = []
+            # Calcular la tabla consolidada con pivot_table
+            tabla_resultados = df.pivot_table(
+                index=["Tipo de documento", "Grupo"],
+                columns="Mes",
+                values="Base",
+                aggfunc="sum",
+                fill_value=0
+            ).reset_index()
 
-            for tipo_doc in tipo_documentos:
-                for grado in grados:
-                    # Filtrar datos por 'Tipo de documento' y 'Grupo'
-                    df_filtro = df[(df["Tipo de documento"] == tipo_doc) & (df["Grupo"] == grado)]
+            # Agregar columna de total anual
+            tabla_resultados["Total Anual"] = tabla_resultados.iloc[:, 2:].sum(axis=1)
 
-                    # Sumar 'Base' por mes
-                    suma_por_mes = (
-                        df_filtro.groupby("Mes")["Base"].sum()
-                        .reindex(meses_orden, fill_value=0)
-                    )
-
-                    # Calcular total anual
-                    total_anual = suma_por_mes.sum()
-
-                    # Crear fila de resultados
-                    fila = [tipo_doc, grado] + list(suma_por_mes.values) + [total_anual]
-                    tabla_resultados.append(fila)
-
-            # Crear DataFrame con la tabla consolidada
-            columnas = ["Tipo Doc", "Grado"] + meses_orden + ["Total Anual"]
-            tabla_df = pd.DataFrame(tabla_resultados, columns=columnas)
-
-            # Redondear valores a enteros
-            tabla_df = tabla_df.round(0)
-
-            # Mostrar tabla en la aplicación
+            # Mostrar tabla consolidada en la aplicación
             st.markdown("### Tabla consolidada:")
-            st.dataframe(tabla_df)
+            st.dataframe(tabla_resultados)
 
             # Crear gráficos de barras por tipo de documento
             st.markdown("### Gráficos de barras: porcentaje relativo del valor por tipo de documento")
 
-            # Lista de gráficos que se mostrarán
-            all_figures = []
             for tipo_doc in tipo_documentos:
-                fig, axes = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
-                fig.suptitle(f"Porcentaje relativo de {tipo_doc}", fontsize=16)
+                tipo_df = tabla_resultados[tabla_resultados["Tipo de documento"] == tipo_doc]
+                if tipo_df.empty:
+                    st.warning(f"No hay datos suficientes para generar el gráfico de {tipo_doc}.")
+                else:
+                    fig, ax = plt.subplots(figsize=(10, 6))
+                    total_anual = tipo_df["Total Anual"].sum()
+                    valores_por_mes = tipo_df.iloc[:, 2:-1].sum().values
+                    meses = tipo_df.columns[2:-1]
 
-                for ax, grado in zip(axes, grados):
-                    # Filtrar los datos para el gráfico
-                    df_filtro = tabla_df[(tabla_df["Tipo Doc"] == tipo_doc) & (tabla_df["Grado"] == grado)]
-                    total_anual = df_filtro["Total Anual"].values[0]
-
-                    # Filtrar meses con totales mayores a 0
-                    meses_validos = [mes for mes, valor in zip(meses_orden, df_filtro[meses_orden].values.flatten()) if valor > 0]
-                    valores_validos = [valor for valor in df_filtro[meses_orden].values.flatten() if valor > 0]
-
-                    # Crear el gráfico de barras si hay valores válidos
-                    if valores_validos:
-                        porcentajes = (pd.Series(valores_validos) / total_anual) * 100
-                        ax.bar(meses_validos, porcentajes, color='skyblue', width=0.6)
-                        ax.set_title(grado, fontsize=14)
+                    if total_anual > 0:
+                        porcentajes = (valores_por_mes / total_anual) * 100
+                        ax.bar(meses, porcentajes, color='skyblue', width=0.6)
+                        ax.set_title(f"Porcentaje relativo de {tipo_doc}", fontsize=16)
                         ax.set_xlabel("Mes", fontsize=12)
                         ax.set_ylabel("Porcentaje (%)", fontsize=12)
                         ax.set_ylim(0, 100)
-                        ax.set_xticklabels(meses_validos, rotation=45)
+                        ax.set_xticklabels(meses, rotation=45)
 
-                        # Agregar etiquetas a las barras
+                        # Etiquetas de porcentaje
                         for i, porcentaje in enumerate(porcentajes):
                             ax.text(i, porcentaje + 1, f"{porcentaje:.1f}%", ha='center', va='bottom', fontsize=10)
 
-                # Mostrar el gráfico en la aplicación
-                st.pyplot(fig)
-
-                # Añadir el gráfico a la lista de figuras para el PDF
-                all_figures.append(fig)
-
-            # Crear un PDF para guardar los gráficos
-            def crear_pdf(figures):
-                pdf_output = BytesIO()
-                with PdfPages(pdf_output) as pdf:
-                    for fig in figures:
-                        pdf.savefig(fig)
-                        plt.close(fig)
-                return pdf_output.getvalue()
-
-            # Botón para descargar el PDF de los gráficos
-            st.markdown("### Descargar gráficos en PDF")
-            pdf_data = crear_pdf(all_figures)
-            st.download_button(
-                label="Descargar gráficos en PDF",
-                data=pdf_data,
-                file_name="gráficos_dian.pdf",
-                mime="application/pdf"
-            )
-
-            # Generar archivo Excel para descargar
-            @st.cache_data
-            def convertir_a_excel(dataframe):
-                output = BytesIO()
-                with pd.ExcelWriter(output, engine="openpyxl") as writer:
-                    dataframe.to_excel(writer, index=False, sheet_name="Resultados")
-                return output.getvalue()
-
-            # Archivo para descargar
-            excel_data = convertir_a_excel(tabla_df)
-            st.download_button(
-                label="Descargar tabla consolidada en Excel",
-                data=excel_data,
-                file_name="analisis_dian.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+                        # Mostrar el gráfico
+                        st.pyplot(fig)
+                    else:
+                        st.warning(f"No hay valores suficientes para el gráfico de {tipo_doc}.")
 
     except Exception as e:
         st.error(f"Error procesando el archivo: {e}")
