@@ -90,7 +90,10 @@ if uploaded_file:
             # Redondear valores a enteros
             tabla_df = tabla_df.round(0)
 
-            # Mostrar tabla en la aplicación
+            # Aplicar formato de moneda a los valores numéricos (excepto 'Tipo Doc' y 'Grado')
+            tabla_df.iloc[:, 2:] = tabla_df.iloc[:, 2:].applymap(lambda x: f"${x:,.0f}")
+
+            # Mostrar tabla en la aplicación con formato
             st.markdown("### Tabla consolidada:")
             st.dataframe(tabla_df)
 
@@ -169,4 +172,3 @@ if uploaded_file:
         st.error(f"Error procesando el archivo: {e}")
 else:
     st.write("Por favor, sube un archivo Excel para comenzar.")
-
