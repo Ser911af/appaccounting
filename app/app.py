@@ -61,11 +61,9 @@ if uploaded_file:
             # Obtener valores únicos de 'Tipo de documento'
             tipo_documentos = df["Tipo de documento"].unique()
 
-            # Validar tipos de documentos inesperados
-            expected_docs = {"Factura", "Nota Crédito", "Nota Débito"}
-            unexpected_docs = set(tipo_documentos) - expected_docs
-            if unexpected_docs:
-                st.warning(f"Se encontraron tipos de documentos inesperados: {', '.join(unexpected_docs)}")
+            # Mostrar lista de categorías de 'Tipo de documento'
+            st.markdown("### Categorías en 'Tipo de documento':")
+            st.write(tipo_documentos)
 
             # Crear tabla consolidada usando pd.pivot_table
             tabla_resultados = pd.pivot_table(
@@ -83,7 +81,14 @@ if uploaded_file:
             # Restablecer índices para mostrar en el DataFrame
             tabla_resultados = tabla_resultados.reset_index()
 
-            # Mostrar tabla en la aplicación
+            # Aplicar formato de moneda a las columnas numéricas
+            tabla_resultados = tabla_resultados.style.format({
+                "Base": "${:,.0f}",
+                "Total Anual": "${:,.0f}",
+                **{month: "${:,.0f}" for month in meses_orden}  # Formatear todas las columnas de meses
+            })
+
+            # Mostrar tabla con formato
             st.markdown("### Tabla consolidada:")
             st.dataframe(tabla_resultados)
 
@@ -99,7 +104,7 @@ if uploaded_file:
                 for ax, grado in zip(axes, ["Emitido", "Recibido"]):
                     # Filtrar los datos para el gráfico
                     df_filtro = tabla_resultados[
-                        (tabla_resultados["Tipo de documento"] == tipo_doc) &
+                        (tabla_resultados["Tipo de documento"] == tipo_doc) & 
                         (tabla_resultados["Grupo"] == grado)
                     ]
 
@@ -122,14 +127,15 @@ if uploaded_file:
                             ax.text(i, porcentaje + 1, f"{porcentaje:.1f}%", ha='center', va='bottom', fontsize=10)
                     else:
                         ax.text(0.5, 0.5, "Sin datos", ha='center', va='center', fontsize=12)
-                        ax.set_xticks([])
-                        ax.set_yticks([])
+                        ax.set_xticks([])  # Evitar mostrar etiquetas vacías
+                        ax.set_yticks([])  # Evitar mostrar ticks vacíos
 
-                # Mostrar el gráfico en la aplicación
-                st.pyplot(fig)
-
-                # Añadir el gráfico a la lista de figuras para el PDF
-                all_figures.append(fig)
+                # Solo agregar el gráfico si hay datos para mostrar
+                if not df_filtro.empty:
+                    # Mostrar el gráfico en la aplicación
+                    st.pyplot(fig)
+                    # Añadir el gráfico a la lista de figuras para el PDF
+                    all_figures.append(fig)
 
             # Crear un PDF para guardar los gráficos
             def crear_pdf(figures):
@@ -171,4 +177,3 @@ if uploaded_file:
         st.error(f"Error procesando el archivo: {e}")
 else:
     st.write("Por favor, sube un archivo Excel para comenzar el análisis.")
-
