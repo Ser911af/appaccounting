@@ -82,11 +82,10 @@ if uploaded_file:
             tabla_resultados = tabla_resultados.reset_index()
 
             # Aplicar formato de moneda a las columnas numéricas
-            tabla_resultados = tabla_resultados.style.format({
-                "Base": "${:,.0f}",
-                "Total Anual": "${:,.0f}",
-                **{month: "${:,.0f}" for month in meses_orden}  # Formatear todas las columnas de meses
-            })
+            tabla_resultados["Total Anual"] = tabla_resultados["Total Anual"].apply(lambda x: f"${x:,.0f}")
+            for month in meses_orden:
+                tabla_resultados[month] = tabla_resultados[month].apply(lambda x: f"${x:,.0f}")
+            tabla_resultados["Base"] = tabla_resultados["Base"].apply(lambda x: f"${x:,.0f}")
 
             # Mostrar tabla con formato
             st.markdown("### Tabla consolidada:")
