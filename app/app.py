@@ -38,9 +38,6 @@ if uploaded_file:
             if df["Total"].isnull().any() or df["IVA"].isnull().any():
                 st.warning("Algunos valores de 'Total' o 'IVA' no son válidos y se han marcado como NaN.")
 
-            # Crear columna 'Base' redondeando a enteros
-            df["Base"] = (df["IVA"].fillna(0)).round(0)
-
             # Extraer el nombre del mes de forma manual
             month_mapping = {
                 1: "January", 2: "February", 3: "March", 4: "April",
@@ -53,93 +50,71 @@ if uploaded_file:
             meses_orden = list(month_mapping.values())
             df["Mes"] = pd.Categorical(df["Mes"], categories=meses_orden, ordered=True)
 
-            # Obtener valores únicos de 'Tipo de documento' y 'Grupo'
-            tipo_documentos = df["Tipo de documento"].unique()
-            grados = ["Emitido", "Recibido"]
-
-            # Mostrar la lista de categorías únicas de 'Tipo de documento' y enumerarlas
-            st.markdown("### Categorías únicas de 'Tipo de documento':")
-            for idx, tipo_doc in enumerate(tipo_documentos, start=1):
-                st.write(f"{idx}. {tipo_doc}")
+            # Gráfico de la evolución mensual del IVA
+            st.markdown("### Gráfico: Evolución del Total de IVA por Mes")
+            iva_por_mes = df.groupby("Mes")["IVA"].sum().reindex(meses_orden, fill_value=0)
+            fig_iva, ax_iva = plt.subplots(figsize=(10, 6))
+            ax_iva.plot(iva_por_mes.index, iva_por_mes.values, marker='o', color='b', linestyle='-')
+            ax_iva.set_title("Evolución del Total de IVA por Mes", fontsize=16)
+            ax_iva.set_xlabel("Mes", fontsize=12)
+            ax_iva.set_ylabel("Total de IVA", fontsize=12)
+            ax_iva.grid(True)
+            ax_iva.set_xticklabels(meses_orden, rotation=45)
+            st.pyplot(fig_iva)
 
             # Crear tabla consolidada
+            tipo_documentos = df["Tipo de documento"].unique()
+            grados = ["Emitido", "Recibido"]
             tabla_resultados = []
 
             for tipo_doc in tipo_documentos:
                 for grado in grados:
-                    # Filtrar datos por 'Tipo de documento' y 'Grupo'
                     df_filtro = df[(df["Tipo de documento"] == tipo_doc) & (df["Grupo"] == grado)]
-
-                    # Sumar 'Base' por mes
                     suma_por_mes = (
-                        df_filtro.groupby("Mes")["Base"].sum()
+                        df_filtro.groupby("Mes")["IVA"].sum()
                         .reindex(meses_orden, fill_value=0)
                     )
-
-                    # Calcular total anual
                     total_anual = suma_por_mes.sum()
-
-                    # Crear fila de resultados
                     fila = [tipo_doc, grado] + list(suma_por_mes.values) + [total_anual]
                     tabla_resultados.append(fila)
 
-            # Crear DataFrame con la tabla consolidada
             columnas = ["Tipo Doc", "Grado"] + meses_orden + ["Total Anual"]
             tabla_df = pd.DataFrame(tabla_resultados, columns=columnas)
-
-            # Redondear valores a enteros
             tabla_df = tabla_df.round(0)
-
-            # Mostrar tabla en la aplicación
             st.markdown("### Tabla consolidada:")
             st.dataframe(tabla_df)
 
-            # Crear gráficos de barras por tipo de documento
-            st.markdown("### Gráficos de barras: porcentaje relativo del valor por tipo de documento")
-
-            # Lista de gráficos que se mostrarán
+            # Gráficos de barras existentes
+            st.markdown("### Gráficos de barras: porcentaje relativo del IVA por tipo de documento")
             all_figures = []
             for tipo_doc in tipo_documentos:
                 fig, axes = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
                 fig.suptitle(f"Porcentaje relativo de {tipo_doc}", fontsize=16)
-
                 for ax, grado in zip(axes, grados):
-                    # Filtrar los datos para el gráfico
                     df_filtro = tabla_df[(tabla_df["Tipo Doc"] == tipo_doc) & (tabla_df["Grado"] == grado)]
                     total_anual = df_filtro["Total Anual"].values[0]
-
-                    # Calcular el porcentaje de cada mes respecto al total anual
                     porcentajes = (df_filtro[meses_orden].values.flatten() / total_anual) * 100
-
-                    # Crear el gráfico de barras
                     ax.bar(meses_orden, porcentajes, color='skyblue', width=0.6)
                     ax.set_title(grado, fontsize=14)
                     ax.set_xlabel("Mes", fontsize=12)
                     ax.set_ylabel("Porcentaje (%)", fontsize=12)
                     ax.set_ylim(0, 100)
                     ax.set_xticklabels(meses_orden, rotation=45)
-
-                    # Agregar etiquetas a las barras
                     for i, porcentaje in enumerate(porcentajes):
                         ax.text(i, porcentaje + 1, f"{porcentaje:.1f}%", ha='center', va='bottom', fontsize=10)
-
-                # Mostrar el gráfico en la aplicación
                 st.pyplot(fig)
-
-                # Añadir el gráfico a la lista de figuras para el PDF
                 all_figures.append(fig)
 
-            # Crear un PDF para guardar los gráficos
+            # Descargar gráficos en PDF
             def crear_pdf(figures):
                 pdf_output = BytesIO()
                 with PdfPages(pdf_output) as pdf:
+                    pdf.savefig(fig_iva)  # Agregar el gráfico de evolución del IVA
                     for fig in figures:
                         pdf.savefig(fig)
                         plt.close(fig)
                 return pdf_output.getvalue()
 
-            # Botón para descargar el PDF de los gráficos
-            st.markdown("### Descargar gráficos en PDF")
             pdf_data = crear_pdf(all_figures)
             st.download_button(
                 label="Descargar gráficos en PDF",
@@ -156,7 +131,6 @@ if uploaded_file:
                     dataframe.to_excel(writer, index=False, sheet_name="Resultados")
                 return output.getvalue()
 
-            # Archivo para descargar
             excel_data = convertir_a_excel(tabla_df)
             st.download_button(
                 label="Descargar tabla consolidada en Excel",
