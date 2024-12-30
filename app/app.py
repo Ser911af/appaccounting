@@ -39,7 +39,7 @@ if uploaded_file:
                 st.warning("Algunos valores de 'Total' o 'IVA' no son válidos y se han marcado como NaN.")
 
             # Crear columna 'Base' redondeando a enteros
-            df["Base"] = (df["Total"].fillna(0) - df["IVA"].fillna(0)).round(0)
+            df["Base"] = (df["IVA"].fillna(0)).round(0)
 
             # Extraer el nombre del mes de forma manual
             month_mapping = {
