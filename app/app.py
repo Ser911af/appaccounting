@@ -5,8 +5,8 @@ from io import BytesIO
 from matplotlib.backends.backend_pdf import PdfPages
 
 # Título de la aplicación
-st.title("DIAN Report Analyzer")
-st.subheader("Carga tu reporte DIAN y obtén un análisis detallado del archivo")
+st.title("IVA DIAN Report Analyzer")
+st.subheader("Carga tu reporte DIAN")
 
 # Subida del archivo
 uploaded_file = st.file_uploader("Sube tu archivo Excel", type=["xlsx"])
