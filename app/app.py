@@ -44,9 +44,9 @@ if uploaded_file:
 
             # Extraer el nombre del mes de forma manual
             month_mapping = {
-                1: "January", 2: "February", 3: "March", 4: "April",
-                5: "May", 6: "June", 7: "July", 8: "August",
-                9: "September", 10: "October", 11: "November", 12: "December"
+               1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
+    5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
+    9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
             }
             df["Mes"] = df["Fecha Emisión"].dt.month.map(month_mapping)
 
