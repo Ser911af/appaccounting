@@ -96,31 +96,29 @@ if uploaded_file:
                 st.markdown("### Tabla consolidada con Base (Total - IVA):")
                 st.dataframe(tabla_df)
 
-                # Gráfico de barras con porcentaje de cada mes respecto al total anual
-                st.markdown("### Gráfico de barras: porcentaje relativo del valor por mes")
-                fig, ax = plt.subplots(figsize=(10, 6))
+                # Gráfico de líneas de evolución mensual del total
+                st.markdown("### Gráfico: Evolución del Total de IVA por Mes (en millones de pesos)")
+                iva_por_mes = df.groupby("Mes")["Base_Total"].sum().reindex(meses_orden, fill_value=0)
+                iva_por_mes_millones = iva_por_mes / 1_000_000  # Convertir a millones de pesos
 
-                # Sumar los valores de 'Base_Total' para cada mes
-                suma_por_mes_total = df.groupby("Mes")["Base_Total"].sum().reindex(meses_orden, fill_value=0)
-                total_anual = suma_por_mes_total.sum()
+                fig_iva, ax_iva = plt.subplots(figsize=(10, 6))
+                ax_iva.plot(iva_por_mes_millones.index, iva_por_mes_millones.values, marker='o', color='b', linestyle='-')
+                ax_iva.set_title("Evolución del Total por Mes (en millones de pesos)", fontsize=16)
+                ax_iva.set_xlabel("Mes", fontsize=12)
+                ax_iva.set_ylabel("Total (Millones de Pesos)", fontsize=12)
+                ax_iva.grid(True, linestyle='--', alpha=0.6)
+                ax_iva.set_xticklabels(meses_orden, rotation=45)
 
-                # Calcular el porcentaje para cada mes
-                porcentajes = (suma_por_mes_total / total_anual) * 100
+                # Calcular el porcentaje para cada mes respecto al total anual
+                total_anual = iva_por_mes.sum()
+                porcentajes = (iva_por_mes / total_anual) * 100
 
-                # Crear el gráfico de barras
-                ax.bar(meses_orden, porcentajes, color='skyblue', width=0.6)
-                ax.set_title("Porcentaje relativo de Base (Total - IVA) por mes", fontsize=16)
-                ax.set_xlabel("Mes", fontsize=12)
-                ax.set_ylabel("Porcentaje (%)", fontsize=12)
-                ax.set_ylim(0, 100)
-                ax.set_xticklabels(meses_orden, rotation=45)
-
-                # Agregar etiquetas a las barras
-                for i, porcentaje in enumerate(porcentajes):
-                    ax.text(i, porcentaje + 1, f"{porcentaje:.1f}%", ha='center', va='bottom', fontsize=10)
+                # Agregar etiquetas a cada punto del gráfico con el porcentaje
+                for i, value in enumerate(iva_por_mes_millones.values):
+                    ax_iva.text(i, value, f"${value:,.1f}M ({porcentajes[i]:.1f}%)", ha='center', va='bottom', fontsize=10)
 
                 # Mostrar gráfico en la aplicación
-                st.pyplot(fig)
+                st.pyplot(fig_iva)
 
                 # Crear gráficos de barras por tipo de documento
                 st.markdown("### Gráficos de barras: porcentaje relativo del valor por tipo de documento")
@@ -212,31 +210,29 @@ if uploaded_file:
                 st.markdown("### Tabla consolidada con Base (solo IVA):")
                 st.dataframe(tabla_df)
 
-                # Gráfico de barras con porcentaje de cada mes respecto al total anual
-                st.markdown("### Gráfico de barras: porcentaje relativo del valor por mes")
-                fig, ax = plt.subplots(figsize=(10, 6))
+                # Gráfico de líneas de evolución mensual del total
+                st.markdown("### Gráfico: Evolución del Total de IVA por Mes (en millones de pesos)")
+                iva_por_mes = df.groupby("Mes")["Base_IVA"].sum().reindex(meses_orden, fill_value=0)
+                iva_por_mes_millones = iva_por_mes / 1_000_000  # Convertir a millones de pesos
 
-                # Sumar los valores de 'Base_IVA' para cada mes
-                suma_por_mes_total = df.groupby("Mes")["Base_IVA"].sum().reindex(meses_orden, fill_value=0)
-                total_anual = suma_por_mes_total.sum()
+                fig_iva, ax_iva = plt.subplots(figsize=(10, 6))
+                ax_iva.plot(iva_por_mes_millones.index, iva_por_mes_millones.values, marker='o', color='b', linestyle='-')
+                ax_iva.set_title("Evolución del Total por Mes (en millones de pesos)", fontsize=16)
+                ax_iva.set_xlabel("Mes", fontsize=12)
+                ax_iva.set_ylabel("Total (Millones de Pesos)", fontsize=12)
+                ax_iva.grid(True, linestyle='--', alpha=0.6)
+                ax_iva.set_xticklabels(meses_orden, rotation=45)
 
-                # Calcular el porcentaje para cada mes
-                porcentajes = (suma_por_mes_total / total_anual) * 100
+                # Calcular el porcentaje para cada mes respecto al total anual
+                total_anual = iva_por_mes.sum()
+                porcentajes = (iva_por_mes / total_anual) * 100
 
-                # Crear el gráfico de barras
-                ax.bar(meses_orden, porcentajes, color='skyblue', width=0.6)
-                ax.set_title("Porcentaje relativo de Base (solo IVA) por mes", fontsize=16)
-                ax.set_xlabel("Mes", fontsize=12)
-                ax.set_ylabel("Porcentaje (%)", fontsize=12)
-                ax.set_ylim(0, 100)
-                ax.set_xticklabels(meses_orden, rotation=45)
-
-                # Agregar etiquetas a las barras
-                for i, porcentaje in enumerate(porcentajes):
-                    ax.text(i, porcentaje + 1, f"{porcentaje:.1f}%", ha='center', va='bottom', fontsize=10)
+                # Agregar etiquetas a cada punto del gráfico con el porcentaje
+                for i, value in enumerate(iva_por_mes_millones.values):
+                    ax_iva.text(i, value, f"${value:,.1f}M ({porcentajes[i]:.1f}%)", ha='center', va='bottom', fontsize=10)
 
                 # Mostrar gráfico en la aplicación
-                st.pyplot(fig)
+                st.pyplot(fig_iva)
 
                 # Crear gráficos de barras por tipo de documento
                 st.markdown("### Gráficos de barras: porcentaje relativo del valor por tipo de documento")
@@ -296,6 +292,5 @@ if uploaded_file:
                     file_name="gráficos_dian.pdf",
                     mime="application/pdf"
                 )
-
     except Exception as e:
         st.error(f"Error al procesar el archivo: {e}")
