@@ -1,5 +1,8 @@
 import pandas as pd
 import streamlit as st
+import matplotlib.pyplot as plt
+from io import BytesIO
+from matplotlib.backends.backend_pdf import PdfPages
 
 # Título de la aplicación
 st.title("DIAN Report Analyzer")
@@ -82,6 +85,7 @@ if uploaded_file:
 
                 # Redondear valores a enteros
                 tabla_df = tabla_df.round(0)
+
                 return tabla_df
 
             # Opciones para el usuario
@@ -99,7 +103,62 @@ if uploaded_file:
                 st.markdown("### Tabla consolidada basada en 'Base IVA (IVA solamente)':")
                 st.dataframe(tabla_df)
 
+            # Crear gráficos de barras por tipo de documento
+            st.markdown("### Gráficos de barras: porcentaje relativo del valor por tipo de documento")
+
+            # Lista de gráficos que se mostrarán
+            all_figures = []
+            for tipo_doc in tipo_documentos:
+                fig, axes = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
+                fig.suptitle(f"Porcentaje relativo de {tipo_doc}", fontsize=16)
+
+                for ax, grado in zip(axes, grados):
+                    # Filtrar los datos para el gráfico
+                    df_filtro = tabla_df[(tabla_df["Tipo Doc"] == tipo_doc) & (tabla_df["Grado"] == grado)]
+                    total_anual = df_filtro["Total Anual"].values[0]
+
+                    # Calcular el porcentaje de cada mes respecto al total anual
+                    porcentajes = (df_filtro[meses_orden].values.flatten() / total_anual) * 100
+
+                    # Crear el gráfico de barras
+                    ax.bar(meses_orden, porcentajes, color='skyblue', width=0.6)
+                    ax.set_title(grado, fontsize=14)
+                    ax.set_xlabel("Mes", fontsize=12)
+                    ax.set_ylabel("Porcentaje (%)", fontsize=12)
+                    ax.set_ylim(0, 100)
+                    ax.set_xticklabels(meses_orden, rotation=45)
+
+                    # Agregar etiquetas a las barras
+                    for i, porcentaje in enumerate(porcentajes):
+                        ax.text(i, porcentaje + 1, f"{porcentaje:.1f}%", ha='center', va='bottom', fontsize=10)
+
+                # Mostrar el gráfico en la aplicación
+                st.pyplot(fig)
+
+                # Añadir el gráfico a la lista de figuras para el PDF
+                all_figures.append(fig)
+
+            # Crear un PDF para guardar los gráficos
+            def crear_pdf(figures):
+                pdf_output = BytesIO()
+                with PdfPages(pdf_output) as pdf:
+                    for fig in figures:
+                        pdf.savefig(fig)
+                        plt.close(fig)
+                return pdf_output.getvalue()
+
+            # Botón para descargar el PDF de los gráficos
+            st.markdown("### Descargar gráficos en PDF")
+            pdf_data = crear_pdf(all_figures)
+            st.download_button(
+                label="Descargar gráficos en PDF",
+                data=pdf_data,
+                file_name="gráficos_dian.pdf",
+                mime="application/pdf"
+            )
+
     except Exception as e:
         st.error(f"Error procesando el archivo: {e}")
 else:
     st.write("Por favor, sube un archivo Excel para comenzar.")
+
