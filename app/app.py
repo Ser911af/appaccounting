@@ -115,7 +115,7 @@ if uploaded_file:
 
                 # Agregar etiquetas a cada punto del gráfico con el porcentaje
                 for i, value in enumerate(iva_por_mes_millones.values):
-                    ax_iva.text(i, value, f"${value:,.1f}M ({porcentajes[i]:.1f}%)", ha='center', va='bottom', fontsize=10)
+                    ax_iva.text(i, value, f"${value:,.0f}M ({porcentajes[i]:.1f}%)", ha='center', va='bottom', fontsize=10)
 
                 # Mostrar gráfico en la aplicación
                 st.pyplot(fig_iva)
