@@ -209,7 +209,22 @@ if uploaded_file:
                 # Mostrar tabla en la aplicación
                 st.markdown("### Tabla consolidada con Base (solo IVA):")
                 st.dataframe(tabla_df)
+                   # Función para convertir el DataFrame en un archivo Excel descargable
+def convertir_a_excel(dataframe):
+    output = BytesIO()
+    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+        dataframe.to_excel(writer, index=False, sheet_name='Consolidado')
+    processed_data = output.getvalue()
+    return processed_data
 
+# Botón para descargar el archivo Excel
+excel_data = convertir_a_excel(tabla_df)
+st.download_button(
+    label="Descargar tabla en Excel",
+    data=excel_data,
+    file_name="tabla_consolidada.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+)
                 # Gráfico de líneas de evolución mensual del total
                 st.markdown("### Gráfico: Evolución del Total de IVA por Mes (en millones de pesos)")
                 iva_por_mes = df.groupby("Mes")["Base_IVA"].sum().reindex(meses_orden, fill_value=0)
