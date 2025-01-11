@@ -114,10 +114,16 @@ if uploaded_file:
             # Gráfico principal (líneas)
             base_col = "Base_Total" if analisis == "Base con Total e IVA" else "Base_IVA"
             suma_mensual_total = df.groupby("Mes")[base_col].sum().reindex(meses_orden, fill_value=0)
+            total_general = suma_mensual_total.sum()
             fig, ax = plt.subplots(figsize=(12, 6))
             suma_mensual_total.plot(kind="line", ax=ax, marker="o", color="blue")
+
+            for i, (mes, valor) in enumerate(zip(meses_orden, suma_mensual_total)):
+                porcentaje = (valor / total_general) * 100 if total_general > 0 else 0
+                ax.text(i, valor, f"{int(valor / 1e6)}M\n({porcentaje:.1f}%)", ha="center", fontsize=10)
+
             ax.set_title("Total Mensual Consolidado", fontsize=16)
-            ax.set_ylabel("Total", fontsize=12)
+            ax.set_ylabel("Total (Millones)", fontsize=12)
             ax.set_xlabel("Mes", fontsize=12)
             ax.grid(True)
             st.pyplot(fig)
@@ -132,8 +138,14 @@ if uploaded_file:
                         df_filtro.groupby("Mes")[base_col].sum()
                         .reindex(meses_orden, fill_value=0)
                     )
+                    total_tipo = suma_por_mes.sum()
                     fig, ax = plt.subplots(figsize=(5, 3))
                     suma_por_mes.plot(kind="bar", ax=ax, color="skyblue", edgecolor="black")
+
+                    for j, valor in enumerate(suma_por_mes):
+                        porcentaje = (valor / total_tipo) * 100 if total_tipo > 0 else 0
+                        ax.text(j, valor, f"{porcentaje:.1f}%", ha="center", va="bottom", fontsize=9)
+
                     ax.set_title(f"{grado}", fontsize=12)
                     ax.set_ylabel("Total", fontsize=10)
                     ax.set_xlabel("Mes", fontsize=10)
