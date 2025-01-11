@@ -110,23 +110,38 @@ if uploaded_file:
 
             # Visualización gráfica
             st.markdown("### Visualización gráfica")
+
+            # Gráfico principal (líneas)
+            base_col = "Base_Total" if analisis == "Base con Total e IVA" else "Base_IVA"
+            suma_mensual_total = df.groupby("Mes")[base_col].sum().reindex(meses_orden, fill_value=0)
+            fig, ax = plt.subplots(figsize=(12, 6))
+            suma_mensual_total.plot(kind="line", ax=ax, marker="o", color="blue")
+            ax.set_title("Total Mensual Consolidado", fontsize=16)
+            ax.set_ylabel("Total", fontsize=12)
+            ax.set_xlabel("Mes", fontsize=12)
+            ax.grid(True)
+            st.pyplot(fig)
+
+            # Gráficos secundarios (barras)
             for tipo_doc in tipo_documentos:
-                for grado in grados:
-                    st.markdown(f"**{tipo_doc} - {grado}**")
+                st.markdown(f"#### {tipo_doc}")
+                col1, col2 = st.columns(2)
+                for i, grado in enumerate(grados):
                     df_filtro = df[(df["Tipo de documento"] == tipo_doc) & (df["Grupo"] == grado)]
-                    base_col = "Base_Total" if analisis == "Base con Total e IVA" else "Base_IVA"
                     suma_por_mes = (
                         df_filtro.groupby("Mes")[base_col].sum()
                         .reindex(meses_orden, fill_value=0)
                     )
-
-                    # Crear gráfico de barras
-                    fig, ax = plt.subplots(figsize=(10, 5))
+                    fig, ax = plt.subplots(figsize=(5, 3))
                     suma_por_mes.plot(kind="bar", ax=ax, color="skyblue", edgecolor="black")
-                    ax.set_title(f"Base Mensual ({base_col}) para {tipo_doc} - {grado}")
-                    ax.set_ylabel("Total")
-                    ax.set_xlabel("Mes")
+                    ax.set_title(f"{grado}", fontsize=12)
+                    ax.set_ylabel("Total", fontsize=10)
+                    ax.set_xlabel("Mes", fontsize=10)
                     ax.set_xticklabels(meses_orden, rotation=45)
-                    st.pyplot(fig)
+                    if i == 0:
+                        col1.pyplot(fig)
+                    else:
+                        col2.pyplot(fig)
+
     except Exception as e:
         st.error(f"Error al procesar el archivo: {e}")
