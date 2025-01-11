@@ -41,19 +41,15 @@ if uploaded_file:
             df["Total"] = pd.to_numeric(df["Total"], errors='coerce')
             df["IVA"] = pd.to_numeric(df["IVA"], errors='coerce')
 
-            # Comprobar si hay valores nulos o inválidos
-            if df["Total"].isnull().any() or df["IVA"].isnull().any():
-                st.warning("Algunos valores de 'Total' o 'IVA' no son válidos y se han marcado como NaN.")
-
             # Crear dos columnas 'Base' con diferentes fórmulas
             df["Base_Total"] = (df["Total"].fillna(0) - df["IVA"].fillna(0)).round(0)
             df["Base_IVA"] = (df["IVA"].fillna(0)).round(0)
 
-            # Extraer el nombre del mes de forma manual
+            # Extraer el nombre del mes
             month_mapping = {
-               1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
-               5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
-               9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
+                1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
+                5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
+                9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
             }
             df["Mes"] = df["Fecha Emisión"].dt.month.map(month_mapping)
 
@@ -72,113 +68,65 @@ if uploaded_file:
             )
 
             # Crear tabla consolidada basada en el análisis seleccionado
-            if analisis == "Base con Total e IVA":
-                tabla_resultados = []
-                for tipo_doc in tipo_documentos:
-                    for grado in grados:
-                        # Filtrar datos por 'Tipo de documento' y 'Grupo'
-                        df_filtro = df[(df["Tipo de documento"] == tipo_doc) & (df["Grupo"] == grado)]
+            tabla_resultados = []
+            for tipo_doc in tipo_documentos:
+                for grado in grados:
+                    # Filtrar datos por 'Tipo de documento' y 'Grupo'
+                    df_filtro = df[(df["Tipo de documento"] == tipo_doc) & (df["Grupo"] == grado)]
 
-                        # Sumar 'Base_Total' por mes
-                        suma_por_mes = (
-                            df_filtro.groupby("Mes")["Base_Total"].sum()
-                            .reindex(meses_orden, fill_value=0)
-                        )
+                    # Sumar bases por mes según el análisis seleccionado
+                    base_col = "Base_Total" if analisis == "Base con Total e IVA" else "Base_IVA"
+                    suma_por_mes = (
+                        df_filtro.groupby("Mes")[base_col].sum()
+                        .reindex(meses_orden, fill_value=0)
+                    )
 
-                        # Calcular total anual
-                        total_anual = suma_por_mes.sum()
+                    # Calcular total anual
+                    total_anual = suma_por_mes.sum()
 
-                        # Crear fila de resultados
-                        fila = [tipo_doc, grado] + list(suma_por_mes.values) + [total_anual]
-                        tabla_resultados.append(fila)
+                    # Crear fila de resultados
+                    fila = [tipo_doc, grado] + list(suma_por_mes.values) + [total_anual]
+                    tabla_resultados.append(fila)
 
-                # Crear DataFrame con la tabla consolidada
-                columnas = ["Tipo Doc", "Grado"] + meses_orden + ["Total Anual"]
-                tabla_df = pd.DataFrame(tabla_resultados, columns=columnas)
+            # Crear DataFrame con la tabla consolidada
+            columnas = ["Tipo Doc", "Grado"] + meses_orden + ["Total Anual"]
+            tabla_df = pd.DataFrame(tabla_resultados, columns=columnas)
 
-                # Redondear valores a enteros
-                tabla_df = tabla_df.round(0)
+            # Redondear valores a enteros
+            tabla_df = tabla_df.round(0)
 
-                # Mostrar tabla en la aplicación
-                st.markdown("### Tabla consolidada con Base (Total - IVA):")
-                st.dataframe(tabla_df)
+            # Mostrar tabla en la aplicación
+            st.markdown(f"### Tabla consolidada: {analisis}")
+            st.dataframe(tabla_df)
 
-                # Graficar resultados
-                for tipo_doc in tipo_documentos:
-                    for grado in grados:
-                        df_filtro = tabla_df[(tabla_df["Tipo Doc"] == tipo_doc) & (tabla_df["Grado"] == grado)]
-                        st.markdown(f"#### Gráfico: {tipo_doc} - {grado}")
-                        fig, ax = plt.subplots(figsize=(10, 6))
-                        ax.bar(df_filtro["Tipo Doc"] + ' - ' + df_filtro["Grado"], df_filtro["Total Anual"], color='skyblue')
-                        ax.set_title(f'Total Anual por {tipo_doc} - {grado}')
-                        ax.set_xlabel('Meses')
-                        ax.set_ylabel('Total Anual')
-                        st.pyplot(fig)
+            # Descargar tabla consolidada en Excel
+            excel_data = convertir_a_excel(tabla_df)
+            st.download_button(
+                label="Descargar tabla en Excel",
+                data=excel_data,
+                file_name="tabla_consolidada.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
-                # Crear archivo Excel para descargar
-                excel_data = convertir_a_excel(tabla_df)
+            # Visualización gráfica
+            st.markdown("### Visualización gráfica")
+            for tipo_doc in tipo_documentos:
+                for grado in grados:
+                    st.markdown(f"**{tipo_doc} - {grado}**")
+                    df_filtro = df[(df["Tipo de documento"] == tipo_doc) & (df["Grupo"] == grado)]
+                    base_col = "Base_Total" if analisis == "Base con Total e IVA" else "Base_IVA"
+                    suma_por_mes = (
+                        df_filtro.groupby("Mes")[base_col].sum()
+                        .reindex(meses_orden, fill_value=0)
+                    )
 
-                # Botón para descargar el archivo Excel
-                st.download_button(
-                    label="Descargar tabla en Excel",
-                    data=excel_data,
-                    file_name="tabla_consolidada.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-
-            elif analisis == "Base con solo IVA":
-                tabla_resultados = []
-                for tipo_doc in tipo_documentos:
-                    for grado in grados:
-                        # Filtrar datos por 'Tipo de documento' y 'Grupo'
-                        df_filtro = df[(df["Tipo de documento"] == tipo_doc) & (df["Grupo"] == grado)]
-
-                        # Sumar 'Base_IVA' por mes
-                        suma_por_mes = (
-                            df_filtro.groupby("Mes")["Base_IVA"].sum()
-                            .reindex(meses_orden, fill_value=0)
-                        )
-
-                        # Calcular total anual
-                        total_anual = suma_por_mes.sum()
-
-                        # Crear fila de resultados
-                        fila = [tipo_doc, grado] + list(suma_por_mes.values) + [total_anual]
-                        tabla_resultados.append(fila)
-
-                # Crear DataFrame con la tabla consolidada
-                columnas = ["Tipo Doc", "Grado"] + meses_orden + ["Total Anual"]
-                tabla_df = pd.DataFrame(tabla_resultados, columns=columnas)
-
-                # Redondear valores a enteros
-                tabla_df = tabla_df.round(0)
-
-                # Mostrar tabla en la aplicación
-                st.markdown("### Tabla consolidada con Base (solo IVA):")
-                st.dataframe(tabla_df)
-
-                # Graficar resultados
-                for tipo_doc in tipo_documentos:
-                    for grado in grados:
-                        df_filtro = tabla_df[(tabla_df["Tipo Doc"] == tipo_doc) & (tabla_df["Grado"] == grado)]
-                        st.markdown(f"#### Gráfico: {tipo_doc} - {grado}")
-                        fig, ax = plt.subplots(figsize=(10, 6))
-                        ax.bar(df_filtro["Tipo Doc"] + ' - ' + df_filtro["Grado"], df_filtro["Total Anual"], color='skyblue')
-                        ax.set_title(f'Total Anual por {tipo_doc} - {grado}')
-                        ax.set_xlabel('Meses')
-                        ax.set_ylabel('Total Anual')
-                        st.pyplot(fig)
-
-                # Crear archivo Excel para descargar
-                excel_data = convertir_a_excel(tabla_df)
-
-                # Botón para descargar el archivo Excel
-                st.download_button(
-                    label="Descargar tabla en Excel",
-                    data=excel_data,
-                    file_name="tabla_consolidada.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-
+                    # Crear gráfico de barras
+                    fig, ax = plt.subplots(figsize=(10, 5))
+                    suma_por_mes.plot(kind="bar", ax=ax, color="skyblue", edgecolor="black")
+                    ax.set_title(f"Base Mensual ({base_col}) para {tipo_doc} - {grado}")
+                    ax.set_ylabel("Total")
+                    ax.set_xlabel("Mes")
+                    ax.set_xticklabels(meses_orden, rotation=45)
+                    st.pyplot(fig)
     except Exception as e:
         st.error(f"Error al procesar el archivo: {e}")
