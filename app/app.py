@@ -62,9 +62,10 @@ if uploaded_file:
             grados = ["Emitido", "Recibido"]
 
             # Opción para seleccionar el tipo de análisis
-            analisis = st.selectbox(
+            analisis = st.radio(
                 "Selecciona el tipo de análisis",
-                ["Base con Total e IVA", "Base con solo IVA"]
+                ["Base con Total e IVA", "Base con solo IVA"],
+                horizontal=True
             )
 
             # Crear tabla consolidada basada en el análisis seleccionado
