@@ -105,7 +105,7 @@ if uploaded_file:
             for i, value in enumerate(total_por_mes_millones):
                 ax_linea.text(
                     i, value,
-                    f"{value:,}M\n({int(porcentajes[i])}%)".replace(",", "."),
+                    f"{int(value):,}M\n({int(porcentajes[i])}%)".replace(",", "."),
                     ha='center', va='bottom', fontsize=10
                 )
 
