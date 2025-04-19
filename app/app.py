@@ -3,6 +3,7 @@ import pandas as pd
 import matplotlib.pyplot as plt
 from io import BytesIO
 from matplotlib.backends.backend_pdf import PdfPages
+import xlsxwriter
 
 # Título de la aplicación
 st.title("DIAN Report Analyzer")
@@ -13,11 +14,27 @@ uploaded_file = st.file_uploader("Sube tu archivo Excel", type=["xlsx"])
 
 # --- FUNCIONES AUXILIARES ---
 
-def convertir_a_excel(dataframe):
+def convertir_a_excel(dataframe_dict):
     output = BytesIO()
     with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        dataframe.to_excel(writer, index=False, sheet_name='Consolidado')
+        for sheet_name, df in dataframe_dict.items():
+            df.to_excel(writer, index=False, sheet_name=sheet_name)
     return output.getvalue()
+
+def generar_pdf(df, filename="output.pdf"):
+    output = BytesIO()
+    pdf = PdfPages(output)
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.axis('tight')
+    ax.axis('off')
+    ax.table(cellText=df.values, colLabels=df.columns, loc='center', cellLoc='center')
+
+    pdf.savefig(fig)
+    pdf.close()
+
+    with open(filename, "wb") as f:
+        f.write(output.getvalue())
 
 def obtener_meses_presentes(df, columna_mes="Mes"):
     meses_orden = [
@@ -124,21 +141,35 @@ if uploaded_file:
             columnas = ["Tipo Doc", "Grado"] + meses_presentes + ["Total Anual"]
             tabla_df = pd.DataFrame(tabla_resultados, columns=columnas).round(0)
 
-            # Mostrar tabla consolidada con formato monetario
-            st.markdown("### Tabla consolidada:")
-            tabla_df_formateada = tabla_df.copy()
-            tabla_df_formateada[meses_presentes + ["Total Anual"]] = tabla_df[meses_presentes + ["Total Anual"]].applymap(lambda x: f"${x:,.0f}".replace(",", "."))
-            st.dataframe(tabla_df_formateada)
+            # Botón para mostrar u ocultar la tabla
+            if st.checkbox("Mostrar/ocultar tabla"):
+                st.markdown("### Tabla consolidada:")
+                tabla_df_formateada = tabla_df.copy()
+                tabla_df_formateada[meses_presentes + ["Total Anual"]] = tabla_df[meses_presentes + ["Total Anual"]].applymap(lambda x: f"${x:,.0f}".replace(",", "."))
+                st.dataframe(tabla_df_formateada)
 
-            # Descargar Excel
+            # Descargar Excel con múltiples hojas
             st.markdown("### Descargar tabla en Excel")
-            excel_data = convertir_a_excel(tabla_df)
+            excel_data = convertir_a_excel({"Emitido": tabla_df[tabla_df["Grado"] == "Emitido"], 
+                                            "Recibido": tabla_df[tabla_df["Grado"] == "Recibido"]})
             st.download_button(
                 label="Descargar tabla en Excel",
                 data=excel_data,
                 file_name="tabla_consolidada.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
+
+            # Generar PDF
+            st.markdown("### Descargar PDF")
+            pdf_filename = "reporte.pdf"
+            generar_pdf(tabla_df, pdf_filename)
+            with open(pdf_filename, "rb") as f:
+                st.download_button(
+                    label="Descargar PDF",
+                    data=f,
+                    file_name=pdf_filename,
+                    mime="application/pdf"
+                )
 
             # Gráfico de evolución mensual
             st.markdown("### Gráfico: Evolución del total mensual")
