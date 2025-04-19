@@ -44,10 +44,10 @@ def graficar_linea_evolucion(df, columna_valor, titulo="Evolución mensual"):
     ax.set_xticklabels(meses, rotation=45)
 
     for i, value in enumerate(total_por_mes_millones):
-        ax.text(i, value, f"{int(value):,}M\n({int(porcentajes[i])}%)".replace(",", "."),
+        ax.text(i, value, f"${int(value):,}M\n({int(porcentajes[i])}%)".replace(",", "."), 
                 ha='center', va='bottom', fontsize=10)
 
-    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{int(x):,}".replace(",", ".")))
+    ax.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"${int(x):,}".replace(",", ".")))
     st.pyplot(fig)
 
 def graficar_barras_tipo_documento(df_tabla, tipo_doc, meses):
@@ -124,9 +124,11 @@ if uploaded_file:
             columnas = ["Tipo Doc", "Grado"] + meses_presentes + ["Total Anual"]
             tabla_df = pd.DataFrame(tabla_resultados, columns=columnas).round(0)
 
-            # Mostrar tabla consolidada
+            # Mostrar tabla consolidada con formato monetario
             st.markdown("### Tabla consolidada:")
-            st.dataframe(tabla_df)
+            tabla_df_formateada = tabla_df.copy()
+            tabla_df_formateada[meses_presentes + ["Total Anual"]] = tabla_df[meses_presentes + ["Total Anual"]].applymap(lambda x: f"${x:,.0f}".replace(",", "."))
+            st.dataframe(tabla_df_formateada)
 
             # Descargar Excel
             st.markdown("### Descargar tabla en Excel")
