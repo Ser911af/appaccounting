@@ -11,9 +11,9 @@ from typing import Optional, List, Tuple
 # =========================
 # Config & Título
 # =========================
-st.set_page_config(page_title="Conciliación de Cartera", layout="wide")
-st.title("Conciliación de Cartera: Cierre vs Balance por Terceros (Override específico)")
-st.caption("Este script usa override fijo: Cartera header=8, Balance header=3. Match por 'piso-num' (ej. 1-9803).")
+st.set_page_config(page_title="Conciliación de Cartera (Automática)", layout="wide")
+st.title("Conciliación de Cartera: CierreCartera vs BALANCE 13452501 (Automática)")
+st.caption("App fija para este archivo: detecta columnas y concilia por clave 'piso-num' (ej. 1-9803). Sin selectores.")
 
 # =========================
 # Utilidades
@@ -37,37 +37,46 @@ def make_unique(names: List[str]) -> List[str]:
             out.append(f"{n}_{seen[n]}")
     return out
 
-def row_keyword_score(row_vals, must_have_any, must_have_optional):
-    row_vals = [normalize_text(v) for v in row_vals]
-    score_any = sum(any(kw in cell for cell in row_vals) for kw in must_have_any)
-    score_opt = sum(any(kw in cell for cell in row_vals) for kw in must_have_optional)
-    return score_any * 10 + score_opt, score_any
-
-def build_table(df_raw: pd.DataFrame, header_row_idx: int,
-                must_have_any: List[str], must_have_optional: List[str]) -> Tuple[pd.DataFrame, int]:
-    """Construye tabla usando 'header_row_idx' ya definido (override)."""
+def build_table_from_row(df_raw: pd.DataFrame, header_row_idx: int) -> pd.DataFrame:
     headers = df_raw.iloc[header_row_idx].astype(str).tolist()
     headers = [h if normalize_text(h) not in ("", "unnamed: 0", "nan") else f"col_{i}" for i, h in enumerate(headers)]
     headers = make_unique(headers)
-
     data = df_raw.iloc[header_row_idx+1:].copy()
     data.columns = headers
     data = data.dropna(how="all")
-
-    # Limpiar espacios SOLO en object
     for c in list(data.select_dtypes(include=["object"]).columns):
         data[c] = data[c].astype(str).str.strip()
-
-    return data, header_row_idx
+    return data
 
 def drop_all_empty_columns(df: pd.DataFrame) -> pd.DataFrame:
-    """Elimina columnas completamente vacías (NaN o strings vacíos)."""
     tmp = df.copy()
     for c in tmp.columns:
         if tmp[c].dtype == object:
             tmp[c] = tmp[c].replace("", np.nan)
     mask_nonempty = tmp.notna().any(axis=0)
     return df.loc[:, mask_nonempty.values]
+
+def to_amount(series: pd.Series) -> pd.Series:
+    s = series.fillna("").astype(str)
+    s = s.replace({r'[^0-9\-,\.]': ''}, regex=True)
+    # ES: miles con punto, decimales con coma
+    s = s.str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
+    return pd.to_numeric(s, errors='coerce')
+
+APT_SEP_REGEX = r"[-_/\.]"  # separadores aceptados: -, _, /, .
+PI_SO_NUM_PATTERN = re.compile(rf"^\s*\d+\s*{APT_SEP_REGEX}\s*\d+\s*$")  # matches completo tipo "1-9803"
+PI_SO_NUM_SEARCH = re.compile(rf"(\d+)\s*{APT_SEP_REGEX}\s*(\d+)")       # busca dentro del texto
+
+def normalize_apto_key(s: str) -> Optional[str]:
+    if pd.isna(s):
+        return None
+    text = str(s).strip()
+    m = PI_SO_NUM_SEARCH.search(text)
+    if not m:
+        return None
+    piso = int(m.group(1))
+    num  = int(m.group(2))
+    return f"{piso}-{num}"
 
 def find_col_fuzzy(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
     cols = list(df.columns)
@@ -79,211 +88,150 @@ def find_col_fuzzy(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
             best, score_best = cols[i], score
     return best
 
-def to_amount(series: pd.Series) -> pd.Series:
-    s = series.fillna("").astype(str)
-    s = s.replace({r'[^0-9\-,\.]': ''}, regex=True)
-    # ES: miles con punto, decimales con coma
-    s = s.str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
-    return pd.to_numeric(s, errors='coerce')
-
-# --- Clave piso-num ---
-APT_SEP_REGEX = r"[-_/\.]"  # separadores aceptados: -, _, /, .
-def normalize_apto_key(s: str) -> Optional[str]:
+def pick_apto_col_by_pattern(df: pd.DataFrame) -> Optional[str]:
     """
-    Extrae 'piso-num' con separadores flexibles y lo normaliza sin ceros a la izquierda.
-    Ej.: '1 - 9803' -> '1-9803', '2_9901' -> '2-9901'
+    Selecciona la mejor columna que contenga valores tipo 'piso-num' (1-9803),
+    puntuando por cantidad de matches regex en las primeras filas no vacías.
     """
-    if pd.isna(s):
-        return None
-    text = str(s).strip()
-    m = re.search(rf"(\d+)\s*{APT_SEP_REGEX}\s*(\d+)", text)
-    if not m:
-        return None
-    piso = int(m.group(1))
-    num  = int(m.group(2))
-    return f"{piso}-{num}"
+    best_col, best_hits = None, -1
+    sample_n = min(200, len(df))
+    for col in df.columns:
+        s = df[col].dropna().astype(str).head(sample_n)
+        hits = s.apply(lambda x: 1 if PI_SO_NUM_SEARCH.search(x) else 0).sum()
+        if hits > best_hits:
+            best_hits = hits
+            best_col = col
+    return best_col
 
-def extract_unit_only(s: str) -> Optional[int]:
-    """Fallback: devuelve solo el número de unidad (parte derecha) o la secuencia numérica más larga."""
-    if pd.isna(s):
-        return None
-    text = str(s)
-    m = re.search(rf"(\d+)\s*{APT_SEP_REGEX}\s*(\d+)", text)
-    if m:
-        try:
-            return int(m.group(2))
-        except:
-            pass
-    nums = re.findall(r"\d+", text)
-    if not nums:
-        return None
-    return int(max(nums, key=len))
+def pick_amount_col(df: pd.DataFrame, prefer_keywords: List[str]) -> Optional[str]:
+    """
+    Elige columna de montos: primero por keywords, si empate/ausencia
+    escoge la columna numérica con mayor suma absoluta.
+    """
+    # 1) por keywords
+    kw_col = find_col_fuzzy(df, prefer_keywords)
+    if kw_col is not None:
+        return kw_col
+    # 2) por numéricos parseables
+    best_col, best_abs_sum = None, -1
+    for col in df.columns:
+        nums = to_amount(df[col])
+        score = np.nansum(np.abs(nums.values))
+        if np.isfinite(score) and score > best_abs_sum:
+            best_abs_sum = score
+            best_col = col
+    return best_col
 
 # =========================
-# Sidebar (parámetros)
+# Parámetros fijos del caso
 # =========================
-st.sidebar.header("Parámetros")
-tolerance = st.sidebar.number_input("Tolerancia (abs) para diferencia ≠ 0", min_value=0.0, value=0.01, step=0.01, format="%.2f")
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("Clave de conciliación")
-key_mode = st.sidebar.radio("Modo de clave para conciliar", ["Piso-Numero (ej. 1-9803)", "Solo Numero"], index=0)
-
-st.sidebar.markdown("---")
-st.sidebar.subheader("Limpieza visual")
-clean_cierre = st.sidebar.checkbox("Eliminar columnas vacías en Cierre", value=True)
-clean_balance = st.sidebar.checkbox("Eliminar columnas vacías en Balance", value=True)
+SHEET_CIERRE = "CierreCartera"
+SHEET_BALANCE = "BALANCE 13452501"
+HDR_CIERRE_IDX = 7   # fila 8 de Excel
+HDR_BALANCE_IDX = 2  # fila 3 de Excel
+TOLERANCE_DEFAULT = 0.01
 
 # =========================
 # Carga de archivo
 # =========================
-uploaded = st.file_uploader("Sube tu Excel (dos hojas: Cierre y Balance)", type=["xlsx"])
+uploaded = st.file_uploader("Sube tu Excel (debe contener 'CierreCartera' y 'BALANCE 13452501')", type=["xlsx"])
 if not uploaded:
-    st.info("Sube un archivo para comenzar. La app espera dos hojas: **Cierre** (apartamento, valor cobro) y **Balance** (NIT/Nombre, nuevo saldo).")
+    st.info("Sube el archivo para continuar. Este flujo está fijado a esas 2 hojas y filas de encabezado.")
     st.stop()
 
-# Leer libro y ofrecer selección de hojas
 try:
     xls = pd.ExcelFile(uploaded)
     sheet_names = xls.sheet_names
-    if len(sheet_names) < 2:
-        st.error("Se requieren al menos 2 hojas.")
+    missing = [s for s in [SHEET_CIERRE, SHEET_BALANCE] if s not in sheet_names]
+    if missing:
+        st.error(f"No encuentro estas hojas requeridas: {', '.join(missing)}.\nHojas disponibles: {', '.join(sheet_names)}")
         st.stop()
-    st.success(f"Hojas detectadas: {', '.join(sheet_names)}")
 except Exception as e:
     st.error(f"No pude leer el Excel: {e}")
     st.stop()
 
-col_sel1, col_sel2 = st.columns(2)
-with col_sel1:
-    sheet_cierre = st.selectbox("Hoja de Cierre (apartamento, valor cobro)", options=sheet_names, index=0)
-with col_sel2:
-    sheet_balance = st.selectbox("Hoja de Balance (NIT/Nombre, nuevo saldo)", options=sheet_names, index=min(1, len(sheet_names)-1))
+# Lectura cruda (sin header) y construcción directa por override
+raw1 = pd.read_excel(uploaded, sheet_name=SHEET_CIERRE, header=None, dtype=str)
+raw2 = pd.read_excel(uploaded, sheet_name=SHEET_BALANCE, header=None, dtype=str)
 
-# Lectura cruda (sin header)
-raw1 = pd.read_excel(uploaded, sheet_name=sheet_cierre, header=None, dtype=str)
-raw2 = pd.read_excel(uploaded, sheet_name=sheet_balance, header=None, dtype=str)
+df1 = build_table_from_row(raw1, HDR_CIERRE_IDX)
+df2 = build_table_from_row(raw2, HDR_BALANCE_IDX)
 
-# =========================
-# OVERRIDE MANUAL (caso específico)
-# Cartera header en fila 8 (index 7)
-# Balance header en fila 3 (index 2)
-# =========================
-HDR_CIERRE_IDX = 7
-HDR_BALANCE_IDX = 2
+# Limpieza: remover columnas totalmente vacías
+df1 = drop_all_empty_columns(df1)
+df2 = drop_all_empty_columns(df2)
 
-df1, hdr1_used = build_table(
-    raw1, HDR_CIERRE_IDX,
-    must_have_any=["apartamento", "apto", "nro", "numero"],
-    must_have_optional=["valor", "cobro", "cuota", "facturado"]
-)
-df2, hdr2_used = build_table(
-    raw2, HDR_BALANCE_IDX,
-    must_have_any=["nit", "tercero", "identificacion", "documento", "nombre"],
-    must_have_optional=["saldo", "cartera", "balance", "credit", "debit"]
-)
-
-# Limpieza visual (sin promover encabezados, porque ya fijamos las filas)
-if clean_cierre:
-    df1 = drop_all_empty_columns(df1)
-if clean_balance:
-    df2 = drop_all_empty_columns(df2)
+st.success("Hojas cargadas con override fijo.")
+with st.expander("Vista previa (Cierre)"):
+    st.dataframe(df1.head(12), use_container_width=True)
+with st.expander("Vista previa (Balance)"):
+    st.dataframe(df2.head(12), use_container_width=True)
 
 # =========================
-# Vista previa tras override
+# Detección automática de columnas
 # =========================
-st.markdown("### Vista previa (override aplicado)")
-st.write(f"**{sheet_balance}** (fila encabezado usada: {hdr2_used})")
-st.dataframe(df2.head(12), use_container_width=True)
-st.write(f"**{sheet_cierre}** (fila encabezado usada: {hdr1_used})")
-st.dataframe(df1.head(12), use_container_width=True)
+# 1) Cierre: columna piso-num (apto) y columna valor cobro
+apto_cierre_col = pick_apto_col_by_pattern(df1)
+if apto_cierre_col is None:
+    # fallback por nombre
+    apto_cierre_col = find_col_fuzzy(df1, ["apto", "apart", "nro", "numero", "inmueble"])
+valor_cobro_col = pick_amount_col(df1, ["valor cobro", "valor a cobrar", "valor cobrado", "cobro", "cuota", "facturado", "valor"])
 
-# =========================
-# Mapeo de columnas
-# =========================
-apto_col_1_auto = find_col_fuzzy(df1, ["nro apartamento", "nro aptos", "no apartamento", "numero apartamento", "num apartamento", "apto", "apartamento", "inmueble", "inmueble codigo"])
-valor_cobro_col_auto = find_col_fuzzy(df1, ["valor cobro", "valor a cobrar", "valor cobrado", "valor", "cobro", "cuota", "facturado"])
+# 2) Balance: columna piso-num (puede ser NIT o Nombre NIT) y columna nuevo saldo
+apto_balance_col = pick_apto_col_by_pattern(df2)
+if apto_balance_col is None:
+    apto_balance_col = find_col_fuzzy(df2, ["nit", "nombre", "apto", "apart", "unidad", "inmueble"])
+nuevo_saldo_col = pick_amount_col(df2, ["nuevo saldo", "saldo nuevo", "saldo final", "saldo", "balance", "cartera", "deuda"])
 
-# En Balance, el 'piso-num' puede venir en NIT o en 'Nombre NIT' u otra columna
-nuevo_saldo_col_auto = find_col_fuzzy(df2, ["nuevo saldo", "saldo nuevo", "saldo", "balance", "deuda", "cartera", "saldo final"])
-apto_balance_auto = find_col_fuzzy(df2, ["apto", "apart", "unidad", "inmueble", "nombre nit", "nombre", "detalle", "nit"])
+chosen = {
+    "apto_cierre_col": apto_cierre_col,
+    "valor_cobro_col": valor_cobro_col,
+    "apto_balance_col": apto_balance_col,
+    "nuevo_saldo_col": nuevo_saldo_col
+}
 
-st.markdown("### Mapeo de columnas")
-c1, c2 = st.columns(2)
-with c1:
-    apto_col_1 = st.selectbox(
-        "Cierre: columna con 'piso-num' o número de apartamento",
-        options=df1.columns.tolist(),
-        index=(df1.columns.tolist().index(apto_col_1_auto) if apto_col_1_auto in df1.columns else 0),
-    )
-    valor_cobro_col = st.selectbox(
-        "Cierre: columna 'Valor Cobro'",
-        options=df1.columns.tolist(),
-        index=(df1.columns.tolist().index(valor_cobro_col_auto) if valor_cobro_col_auto in df1.columns else 0),
-    )
-with c2:
-    # Columna que verdaderamente contiene el 'piso-num' en Balance (puede ser NIT o Nombre NIT)
-    apto_balance_candidates = df2.columns.tolist()
-    apto_balance_col = st.selectbox(
-        "Balance: columna con 'piso-num' (ej. 1-9803) — puede ser NIT o 'Nombre NIT'",
-        options=apto_balance_candidates,
-        index=(apto_balance_candidates.index(apto_balance_auto) if apto_balance_auto in apto_balance_candidates else 0),
-    )
-    nuevo_saldo_col = st.selectbox(
-        "Balance: columna 'Nuevo Saldo'",
-        options=df2.columns.tolist(),
-        index=(df2.columns.tolist().index(nuevo_saldo_col_auto) if nuevo_saldo_col_auto in df2.columns else 0),
-    )
-
-# Validación
-missing = []
-for df_name, df_ref, col in [
-    ("Cierre", df1, apto_col_1),
-    ("Cierre", df1, valor_cobro_col),
-    ("Balance", df2, apto_balance_col),
-    ("Balance", df2, nuevo_saldo_col),
-]:
-    if col not in df_ref.columns:
-        missing.append(f"{df_name}: {col}")
-if missing:
-    st.error("Columnas seleccionadas no existen tras la limpieza: " + ", ".join(missing))
+# Validación de detección
+missing_cols = [k for k, v in chosen.items() if v is None or v not in (list(df1.columns) + list(df2.columns))]
+if any(chosen[k] is None for k in chosen):
+    st.error(f"No pude detectar todas las columnas necesarias automáticamente.\nDetecciones: {chosen}")
     st.stop()
 
+st.info(f"Columnas detectadas automáticamente:\n- Cierre (apto): **{apto_cierre_col}**\n- Cierre (valor cobro): **{valor_cobro_col}**\n- Balance (apto): **{apto_balance_col}**\n- Balance (nuevo saldo): **{nuevo_saldo_col}**")
+
 # =========================
-# Conciliación
+# Conciliación automática
 # =========================
-# 1) Montos
+tolerance = TOLERANCE_DEFAULT
+
+# Montos
 df1["_valor_cobro_num"] = to_amount(df1[valor_cobro_col])
 df2["_nuevo_saldo_num"] = to_amount(df2[nuevo_saldo_col])
 
-# 2) Clave de apto (Cierre y Balance)
-if key_mode.startswith("Piso-Numero"):
-    df1["_apto_key"] = df1[apto_col_1].apply(normalize_apto_key)
-    df2["_apto_key"] = df2[apto_balance_col].apply(normalize_apto_key)
-else:
-    df1["_apto_key"] = df1[apto_col_1].apply(extract_unit_only)
-    df2["_apto_key"] = df2[apto_balance_col].apply(extract_unit_only)
+# Clave piso-num
+df1["_apto_key"] = df1[apto_cierre_col].apply(normalize_apto_key)
+df2["_apto_key"] = df2[apto_balance_col].apply(normalize_apto_key)
 
-# 3) Agregaciones
+# Agregaciones
 g1 = (
     df1.dropna(subset=["_apto_key"])
        .groupby("_apto_key", as_index=False)
        .agg(valor_cobro_sum=("_valor_cobro_num", "sum"),
-            conteo_registros=(apto_col_1, "count"))
+            conteo_registros=(apto_cierre_col, "count"))
 )
+
 g2 = (
     df2.dropna(subset=["_apto_key"])
        .groupby("_apto_key", as_index=False)
        .agg(nuevo_saldo_sum=("_nuevo_saldo_num", "sum"))
 )
 
-# 4) Join y diferencia
+# Join y diferencia
 res = pd.merge(g1, g2, on="_apto_key", how="outer")
 res["valor_cobro_sum"] = res["valor_cobro_sum"].fillna(0.0)
 res["nuevo_saldo_sum"] = res["nuevo_saldo_sum"].fillna(0.0)
 res["diferencia"] = res["valor_cobro_sum"] - res["nuevo_saldo_sum"]
 
-# 5) Filtrar diferencias ≠ 0 (tolerancia)
+# Filtrar diferencias ≠ 0 (tolerancia)
 conciliacion = res[res["diferencia"].abs() > tolerance].sort_values("_apto_key")
 
 # =========================
@@ -319,17 +267,7 @@ st.download_button(
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 )
 
-with st.expander("Diagnóstico"):
-    st.json({
-        "sheet_cierre": sheet_cierre, "hdr_cierre_usado": hdr1_used,
-        "sheet_balance": sheet_balance, "hdr_balance_usado": hdr2_used,
-        "clean_cierre": clean_cierre, "clean_balance": clean_balance,
-        "key_mode": key_mode,
-        "apto_col_1": apto_col_1,
-        "apto_balance_col": apto_balance_col,
-        "valor_cobro_col": valor_cobro_col,
-        "nuevo_saldo_col": nuevo_saldo_col,
-        "tolerance": tolerance,
-    })
+with st.expander("Diagnóstico (columnas detectadas)"):
+    st.json(chosen)
 
-st.caption("Override aplicado: Cartera header=8, Balance header=3. Si el mapeo luce raro, revisa las columnas seleccionadas.")
+st.caption("Automático y sin selectores. Si algo no cuadra, es el 803… o la realidad 😉.")
