@@ -12,8 +12,8 @@ from typing import Optional, List, Tuple
 # Config & Título
 # =========================
 st.set_page_config(page_title="Conciliación de Cartera", layout="wide")
-st.title("Conciliación de Cartera: Cierre vs Balance por Terceros")
-st.caption("Detección robusta de encabezados, limpieza de columnas y conciliación por clave 'piso-num' (ej. 1-9803).")
+st.title("Conciliación de Cartera: Cierre vs Balance por Terceros (Override específico)")
+st.caption("Este script usa override fijo: Cartera header=8, Balance header=3. Match por 'piso-num' (ej. 1-9803).")
 
 # =========================
 # Utilidades
@@ -43,28 +43,9 @@ def row_keyword_score(row_vals, must_have_any, must_have_optional):
     score_opt = sum(any(kw in cell for cell in row_vals) for kw in must_have_optional)
     return score_any * 10 + score_opt, score_any
 
-def find_header_row(df_raw: pd.DataFrame, must_have_any: List[str], must_have_optional: Optional[List[str]] = None) -> Optional[int]:
-    if must_have_optional is None:
-        must_have_optional = []
-    best_row, best_score = None, -1
-    for i in range(len(df_raw)):
-        score, score_any = row_keyword_score(df_raw.iloc[i].tolist(), must_have_any, must_have_optional)
-        if score_any >= 1 and score > best_score:
-            best_row, best_score = i, score
-    return best_row
-
 def build_table(df_raw: pd.DataFrame, header_row_idx: int,
                 must_have_any: List[str], must_have_optional: List[str]) -> Tuple[pd.DataFrame, int]:
-    """Construye tabla usando 'header_row_idx'. Si la fila siguiente luce mejor (título vs encabezado),
-    promueve automáticamente header_row_idx+1."""
-    try:
-        score_here, any_here = row_keyword_score(df_raw.iloc[header_row_idx].tolist(), must_have_any, must_have_optional)
-        score_next, any_next = row_keyword_score(df_raw.iloc[header_row_idx+1].tolist(), must_have_any, must_have_optional)
-        if any_next >= 1 and score_next > score_here:
-            header_row_idx = header_row_idx + 1
-    except Exception:
-        pass
-
+    """Construye tabla usando 'header_row_idx' ya definido (override)."""
     headers = df_raw.iloc[header_row_idx].astype(str).tolist()
     headers = [h if normalize_text(h) not in ("", "unnamed: 0", "nan") else f"col_{i}" for i, h in enumerate(headers)]
     headers = make_unique(headers)
@@ -78,19 +59,6 @@ def build_table(df_raw: pd.DataFrame, header_row_idx: int,
         data[c] = data[c].astype(str).str.strip()
 
     return data, header_row_idx
-
-def promote_first_row_as_header(df: pd.DataFrame) -> pd.DataFrame:
-    """Usa la primera fila de datos como encabezado."""
-    if df.empty:
-        return df
-    new_headers = df.iloc[0].astype(str).tolist()
-    new_headers = [h if normalize_text(h) not in ("", "nan") else f"col_{i}" for i, h in enumerate(new_headers)]
-    new_headers = make_unique(new_headers)
-    df2 = df.iloc[1:].copy()
-    df2.columns = new_headers
-    for c in list(df2.select_dtypes(include=["object"]).columns):
-        df2[c] = df2[c].astype(str).str.strip()
-    return df2
 
 def drop_all_empty_columns(df: pd.DataFrame) -> pd.DataFrame:
     """Elimina columnas completamente vacías (NaN o strings vacíos)."""
@@ -165,8 +133,6 @@ st.sidebar.markdown("---")
 st.sidebar.subheader("Limpieza visual")
 clean_cierre = st.sidebar.checkbox("Eliminar columnas vacías en Cierre", value=True)
 clean_balance = st.sidebar.checkbox("Eliminar columnas vacías en Balance", value=True)
-promote_balance = st.sidebar.checkbox("Promover 1ª fila como encabezado (Balance)", value=True)
-promote_cierre = st.sidebar.checkbox("Promover 1ª fila como encabezado (Cierre) si se ve mejor", value=False)
 
 # =========================
 # Carga de archivo
@@ -194,35 +160,39 @@ with col_sel1:
 with col_sel2:
     sheet_balance = st.selectbox("Hoja de Balance (NIT/Nombre, nuevo saldo)", options=sheet_names, index=min(1, len(sheet_names)-1))
 
-# Lectura cruda (sin header) y detección de encabezados
+# Lectura cruda (sin header)
 raw1 = pd.read_excel(uploaded, sheet_name=sheet_cierre, header=None, dtype=str)
 raw2 = pd.read_excel(uploaded, sheet_name=sheet_balance, header=None, dtype=str)
 
-hdr1_idx = find_header_row(raw1, ["apartamento", "apto", "nro", "numero"], ["valor", "cobro", "cuota", "facturado"])
-hdr2_idx = find_header_row(raw2, ["nit", "tercero", "identificacion", "documento", "nombre"], ["saldo", "cartera", "balance", "credit", "debit"])
+# =========================
+# OVERRIDE MANUAL (caso específico)
+# Cartera header en fila 8 (index 7)
+# Balance header en fila 3 (index 2)
+# =========================
+HDR_CIERRE_IDX = 7
+HDR_BALANCE_IDX = 2
 
-df1, hdr1_used = build_table(raw1, hdr1_idx if hdr1_idx is not None else 0,
-                             ["apartamento", "apto", "nro", "numero"], ["valor", "cobro", "cuota", "facturado"])
-df2, hdr2_used = build_table(raw2, hdr2_idx if hdr2_idx is not None else 0,
-                             ["nit", "tercero", "identificacion", "documento", "nombre"], ["saldo", "cartera", "balance", "credit", "debit"])
+df1, hdr1_used = build_table(
+    raw1, HDR_CIERRE_IDX,
+    must_have_any=["apartamento", "apto", "nro", "numero"],
+    must_have_optional=["valor", "cobro", "cuota", "facturado"]
+)
+df2, hdr2_used = build_table(
+    raw2, HDR_BALANCE_IDX,
+    must_have_any=["nit", "tercero", "identificacion", "documento", "nombre"],
+    must_have_optional=["saldo", "cartera", "balance", "credit", "debit"]
+)
 
-# Limpieza visual configurable
-if promote_balance:
-    df2 = promote_first_row_as_header(df2)
-if promote_cierre:
-    # Promueve si muchos headers son genéricos
-    if sum(normalize_text(c).startswith("col_") or normalize_text(c) == "nan" for c in df1.columns) >= max(2, len(df1.columns)//3):
-        df1 = promote_first_row_as_header(df1)
-
+# Limpieza visual (sin promover encabezados, porque ya fijamos las filas)
 if clean_cierre:
     df1 = drop_all_empty_columns(df1)
 if clean_balance:
     df2 = drop_all_empty_columns(df2)
 
 # =========================
-# Vista previa tras limpieza
+# Vista previa tras override
 # =========================
-st.markdown("### Vista previa (tras limpieza)")
+st.markdown("### Vista previa (override aplicado)")
 st.write(f"**{sheet_balance}** (fila encabezado usada: {hdr2_used})")
 st.dataframe(df2.head(12), use_container_width=True)
 st.write(f"**{sheet_cierre}** (fila encabezado usada: {hdr1_used})")
@@ -235,7 +205,6 @@ apto_col_1_auto = find_col_fuzzy(df1, ["nro apartamento", "nro aptos", "no apart
 valor_cobro_col_auto = find_col_fuzzy(df1, ["valor cobro", "valor a cobrar", "valor cobrado", "valor", "cobro", "cuota", "facturado"])
 
 # En Balance, el 'piso-num' puede venir en NIT o en 'Nombre NIT' u otra columna
-nit_col_2_auto = find_col_fuzzy(df2, ["nit", "identificacion", "id tercero", "documento"])
 nuevo_saldo_col_auto = find_col_fuzzy(df2, ["nuevo saldo", "saldo nuevo", "saldo", "balance", "deuda", "cartera", "saldo final"])
 apto_balance_auto = find_col_fuzzy(df2, ["apto", "apart", "unidad", "inmueble", "nombre nit", "nombre", "detalle", "nit"])
 
@@ -292,7 +261,6 @@ if key_mode.startswith("Piso-Numero"):
     df1["_apto_key"] = df1[apto_col_1].apply(normalize_apto_key)
     df2["_apto_key"] = df2[apto_balance_col].apply(normalize_apto_key)
 else:
-    # Solo parte de unidad (sin piso)
     df1["_apto_key"] = df1[apto_col_1].apply(extract_unit_only)
     df2["_apto_key"] = df2[apto_balance_col].apply(extract_unit_only)
 
@@ -351,12 +319,11 @@ st.download_button(
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 )
 
-with st.expander("Diagnóstico de detecciones"):
+with st.expander("Diagnóstico"):
     st.json({
         "sheet_cierre": sheet_cierre, "hdr_cierre_usado": hdr1_used,
         "sheet_balance": sheet_balance, "hdr_balance_usado": hdr2_used,
         "clean_cierre": clean_cierre, "clean_balance": clean_balance,
-        "promote_balance": promote_balance, "promote_cierre": promote_cierre,
         "key_mode": key_mode,
         "apto_col_1": apto_col_1,
         "apto_balance_col": apto_balance_col,
@@ -365,4 +332,4 @@ with st.expander("Diagnóstico de detecciones"):
         "tolerance": tolerance,
     })
 
-st.caption("Si el 2-9801 no cuadra con el 1-9801, es a propósito: ahora la clave es 'piso-num' 😉.")
+st.caption("Override aplicado: Cartera header=8, Balance header=3. Si el mapeo luce raro, revisa las columnas seleccionadas.")
