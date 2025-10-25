@@ -1,139 +1,304 @@
+# app_conciliacion.py
+# -*- coding: utf-8 -*-
 import streamlit as st
 import pandas as pd
-import matplotlib.pyplot as plt
-from io import BytesIO
-from matplotlib.backends.backend_pdf import PdfPages
+import numpy as np
+import re
+import io
+import unicodedata
+from typing import Optional, Tuple, List
 
-# Título de la aplicación
-st.title("DIAN Report Analyzer")
-st.subheader("Carga tu reporte DIAN y obtén un análisis detallado del archivo")
+st.set_page_config(page_title="Conciliación de Cartera", layout="wide")
+st.title("Conciliación de Cartera: Cierre vs Balance por Terceros")
+st.caption("Sube un Excel con dos hojas (Cierre de Cartera y Balance/NIT). Detecto encabezados, mapeo columnas y genero la hoja 'conciliacion'.")
 
-# Subida del archivo
-uploaded_file = st.file_uploader("Sube tu archivo Excel", type=["xlsx"])
+# ---------------------------
+# Utilidades
+# ---------------------------
+def normalize_text(s: str) -> str:
+    if s is None or (isinstance(s, float) and pd.isna(s)):
+        return ""
+    s = str(s)
+    s = "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
+    return s.lower().strip()
 
-# Función para convertir el DataFrame en un archivo Excel descargable
-def convertir_a_excel(dataframe):
-    output = BytesIO()
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
-        dataframe.to_excel(writer, index=False, sheet_name='Consolidado')
+def find_header_row(df_raw: pd.DataFrame, must_have_any: List[str], must_have_optional: Optional[List[str]] = None) -> Optional[int]:
+    if must_have_optional is None:
+        must_have_optional = []
+    best_row, best_score = None, -1
+    for i in range(len(df_raw)):
+        row_vals = [normalize_text(v) for v in df_raw.iloc[i].tolist()]
+        score_any = sum(any(kw in cell for cell in row_vals) for kw in must_have_any)
+        score_opt = sum(any(kw in cell for cell in row_vals) for kw in must_have_optional)
+        score = score_any * 10 + score_opt
+        if score_any >= 1 and score > best_score:
+            best_row, best_score = i, score
+    return best_row
+
+def build_table(df_raw: pd.DataFrame, header_row_idx: int) -> pd.DataFrame:
+    headers = df_raw.iloc[header_row_idx].astype(str).tolist()
+    headers = [h if normalize_text(h) not in ("", "unnamed: 0") else f"col_{i}" for i, h in enumerate(headers)]
+    data = df_raw.iloc[header_row_idx+1:].copy()
+    data.columns = headers
+    data = data.dropna(how="all")
+    # strip
+    for c in data.columns:
+        if data[c].dtype == object:
+            data[c] = data[c].astype(str).str.strip()
+    return data
+
+def find_col_fuzzy(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
+    cols = list(df.columns)
+    ncols = [normalize_text(c) for c in cols]
+    best, score_best = None, -1
+    for i, nc in enumerate(ncols):
+        score = sum(kw in nc for kw in candidates)
+        if score > score_best:
+            best, score_best = cols[i], score
+    return best
+
+def to_amount(series: pd.Series) -> pd.Series:
+    s = series.fillna("").astype(str)
+    s = s.replace({r'[^0-9\-,\.]': ''}, regex=True)
+    # Manejo ES: puntos de miles, coma decimal
+    s = s.str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
+    return pd.to_numeric(s, errors='coerce')
+
+def extract_digits_longest(s: str) -> Optional[int]:
+    if pd.isna(s):
+        return None
+    s = str(s)
+    matches = re.findall(r'\d+', s)
+    if not matches:
+        return None
+    longest = max(matches, key=len)
+    try:
+        return int(longest)
+    except:
+        return None
+
+def extract_last_n_digits(s: str, n: int) -> Optional[int]:
+    if pd.isna(s):
+        return None
+    s = "".join(re.findall(r'\d', str(s)))
+    if len(s) < n:
+        return None
+    try:
+        return int(s[-n:])
+    except:
+        return None
+
+def extract_regex(s: str, pattern: str) -> Optional[int]:
+    if pd.isna(s):
+        return None
+    m = re.search(pattern, str(s))
+    if not m:
+        return None
+    try:
+        return int(re.sub(r"\D", "", m.group(0)))
+    except:
+        return None
+
+# ---------------------------
+# Sidebar: parámetros
+# ---------------------------
+st.sidebar.header("Parámetros")
+tolerance = st.sidebar.number_input("Tolerancia (absoluta) para considerar diferencia ≠ 0", min_value=0.0, value=0.01, step=0.01, format="%.2f")
+
+extract_strategy = st.sidebar.selectbox(
+    "Estrategia para derivar 'nro apartamento' desde el NIT (Hoja 2)",
+    ["Secuencia numérica más larga", "Últimos N dígitos", "Regex personalizada"]
+)
+
+last_n = None
+regex_pat = None
+if extract_strategy == "Últimos N dígitos":
+    last_n = st.sidebar.number_input("N (últimos N dígitos)", min_value=1, max_value=12, value=3, step=1)
+elif extract_strategy == "Regex personalizada":
+    regex_pat = st.sidebar.text_input("Patrón regex (ej. r'APTO\\s*(\\d{2,4})')", value=r"\d{2,6}")
+
+st.sidebar.markdown("---")
+st.sidebar.caption("TIP: Si tus encabezados están 'escondidos' más abajo, la app los busca por palabras clave y arma la tabla desde allí.")
+
+# ---------------------------
+# Carga de archivo
+# ---------------------------
+uploaded = st.file_uploader("Sube tu archivo Excel (xlsx)", type=["xlsx"])
+
+if not uploaded:
+    st.info("Sube un archivo para comenzar. La app espera dos hojas: una con **Cierre** (apartamento, valor cobro) y otra con **Balance** (NIT, nuevo saldo).")
+    st.stop()
+
+try:
+    xls = pd.ExcelFile(uploaded)
+    sheet_names = xls.sheet_names
+    st.success(f"Archivo detectado. Hojas: {', '.join(sheet_names)}")
+except Exception as e:
+    st.error(f"No pude leer el Excel: {e}")
+    st.stop()
+
+# Selección de hojas (por si el orden no es el esperado)
+col_sel1, col_sel2 = st.columns(2)
+with col_sel1:
+    sheet_cierre = st.selectbox("Hoja de Cierre (nro apartamento, valor cobro)", options=sheet_names, index=0)
+with col_sel2:
+    sheet_balance = st.selectbox("Hoja de Balance (NIT, nuevo saldo)", options=sheet_names, index=min(1, len(sheet_names)-1))
+
+# Lectura cruda (sin header)
+raw1 = pd.read_excel(uploaded, sheet_name=sheet_cierre, header=None, dtype=str)
+raw2 = pd.read_excel(uploaded, sheet_name=sheet_balance, header=None, dtype=str)
+
+# Heurísticas para ubicar encabezados
+hdr1_idx = find_header_row(raw1, must_have_any=["apartamento", "apto", "nro", "numero"], must_have_optional=["valor", "cobro", "cuota", "facturado"])
+hdr2_idx = find_header_row(raw2, must_have_any=["nit", "tercero", "identificacion", "documento"], must_have_optional=["saldo", "cartera", "balance"])
+
+df1 = build_table(raw1, hdr1_idx) if hdr1_idx is not None else pd.read_excel(uploaded, sheet_name=sheet_cierre)
+df2 = build_table(raw2, hdr2_idx) if hdr2_idx is not None else pd.read_excel(uploaded, sheet_name=sheet_balance)
+
+st.markdown("### Vista previa de tablas detectadas")
+st.write(f"**{sheet_cierre}** (fila encabezado detectada: {hdr1_idx if hdr1_idx is not None else 'no detectada, se asumió la primera fila'})")
+st.dataframe(df1.head(10))
+st.write(f"**{sheet_balance}** (fila encabezado detectada: {hdr2_idx if hdr2_idx is not None else 'no detectada, se asumió la primera fila'})")
+st.dataframe(df2.head(10))
+
+# Detección difusa de columnas
+apto_col_1_auto = find_col_fuzzy(df1, ["nro apartamento", "nro apartamentos", "no apartamento", "numero apartamento", "num apartamento", "apto", "apartamento", "inmueble"])
+valor_cobro_col_auto = find_col_fuzzy(df1, ["valor cobro", "valor a cobrar", "valor cobrado", "valor", "cobro", "cuota", "facturado"])
+
+nit_col_2_auto = find_col_fuzzy(df2, ["nit", "identificacion", "id tercero", "tercero", "documento"])
+nuevo_saldo_col_auto = find_col_fuzzy(df2, ["nuevo saldo", "saldo nuevo", "saldo", "balance", "deuda", "cartera"])
+
+st.markdown("### Mapeo de columnas")
+c1, c2 = st.columns(2)
+with c1:
+    apto_col_1 = st.selectbox("Hoja Cierre: columna de nro apartamento", options=df1.columns.tolist(), index=(df1.columns.tolist().index(apto_col_1_auto) if apto_col_1_auto in df1.columns else 0))
+    valor_cobro_col = st.selectbox("Hoja Cierre: columna valor cobro", options=df1.columns.tolist(), index=(df1.columns.tolist().index(valor_cobro_col_auto) if valor_cobro_col_auto in df1.columns else 0))
+with c2:
+    nit_col_2 = st.selectbox("Hoja Balance: columna NIT / Tercero", options=df2.columns.tolist(), index=(df2.columns.tolist().index(nit_col_2_auto) if nit_col_2_auto in df2.columns else 0))
+    nuevo_saldo_col = st.selectbox("Hoja Balance: columna nuevo saldo", options=df2.columns.tolist(), index=(df2.columns.tolist().index(nuevo_saldo_col_auto) if nuevo_saldo_col_auto in df2.columns else 0))
+
+# ---------------------------
+# Transformaciones
+# ---------------------------
+# 1) Normalización de montos
+df1["_valor_cobro_num"] = to_amount(df1[valor_cobro_col])
+df2["_nuevo_saldo_num"] = to_amount(df2[nuevo_saldo_col])
+
+# 2) Clave de apto en Hoja 1 (ya viene explícita)
+def parse_apto_from_df1(x):
+    # Permite que el nro de apto venga con texto; extrae la secuencia más larga
+    matches = re.findall(r'\d+', str(x))
+    if not matches:
+        return None
+    try:
+        return int(max(matches, key=len))
+    except:
+        return None
+
+df1["_apto_num"] = df1[apto_col_1].apply(parse_apto_from_df1)
+
+# 3) Clave de apto en Hoja 2 (derivada del NIT / Tercero)
+if extract_strategy == "Secuencia numérica más larga":
+    df2["_apto_num"] = df2[nit_col_2].apply(extract_digits_longest)
+elif extract_strategy == "Últimos N dígitos":
+    df2["_apto_num"] = df2[nit_col_2].apply(lambda s: extract_last_n_digits(s, last_n))
+else:  # Regex personalizada
+    df2["_apto_num"] = df2[nit_col_2].apply(lambda s: extract_regex(s, regex_pat))
+
+# 4) Agregaciones y match
+g1 = (
+    df1.dropna(subset=["_apto_num"])
+       .groupby("_apto_num", as_index=False)
+       .agg(
+           valor_cobro_sum=("_valor_cobro_num", "sum"),
+           conteo_registros=(apto_col_1, "count")
+       )
+)
+g2 = (
+    df2.dropna(subset=["_apto_num"])
+       .groupby("_apto_num", as_index=False)
+       .agg(nuevo_saldo_sum=("_nuevo_saldo_num", "sum"))
+)
+
+res = pd.merge(g1, g2, on="_apto_num", how="outer")
+res["valor_cobro_sum"] = res["valor_cobro_sum"].fillna(0.0)
+res["nuevo_saldo_sum"] = res["nuevo_saldo_sum"].fillna(0.0)
+res["diferencia"] = res["valor_cobro_sum"] - res["nuevo_saldo_sum"]
+
+conciliacion = res[res["diferencia"].abs() > tolerance].copy()
+conciliacion = conciliacion.sort_values(by="_apto_num")
+
+# ---------------------------
+# Resultados y descarga
+# ---------------------------
+st.markdown("### Resultados")
+m1, m2, m3, m4 = st.columns(4)
+with m1:
+    st.metric("Aptos en Cierre", int(g1.shape[0]))
+with m2:
+    st.metric("Aptos en Balance", int(g2.shape[0]))
+with m3:
+    st.metric("Coincidencias (outer join)", int(res.shape[0]))
+with m4:
+    st.metric("Diferencias ≠ 0", int(conciliacion.shape[0]))
+
+tabs = st.tabs(["Conciliación", "Match Total", "Agregado Hoja 1", "Agregado Hoja 2"])
+with tabs[0]:
+    st.dataframe(conciliacion.reset_index(drop=True))
+with tabs[1]:
+    st.dataframe(res.sort_values("_apto_num").reset_index(drop=True))
+with tabs[2]:
+    st.dataframe(g1.sort_values("_apto_num").reset_index(drop=True))
+with tabs[3]:
+    st.dataframe(g2.sort_values("_apto_num").reset_index(drop=True))
+
+# Construir archivo Excel de salida en memoria
+def build_output_excel() -> bytes:
+    output = io.BytesIO()
+    with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
+        # Exporta todas las hojas útiles
+        g1_export = g1.rename(columns={"_apto_num": "apto_num"})
+        g2_export = g2.rename(columns={"_apto_num": "apto_num"})
+        res_export = res.rename(columns={"_apto_num": "apto_num"})
+        conciliacion_export = conciliacion.rename(columns={"_apto_num": "apto_num"})
+        # Limpiar decimales y dar formato (opcional)
+        for df_exp in (g1_export, g2_export, res_export, conciliacion_export):
+            for c in df_exp.columns:
+                if df_exp[c].dtype.kind in "f":
+                    df_exp[c] = df_exp[c].round(2)
+
+        g1_export.to_excel(writer, sheet_name="agregado_hoja1", index=False)
+        g2_export.to_excel(writer, sheet_name="agregado_hoja2", index=False)
+        res_export.to_excel(writer, sheet_name="match_total", index=False)
+        conciliacion_export.to_excel(writer, sheet_name="conciliacion", index=False)
     return output.getvalue()
 
-if uploaded_file:
-    try:
-        # Leer el archivo Excel
-        df = pd.read_excel(uploaded_file)
+st.markdown("### Descargar resultados")
+excel_bytes = build_output_excel()
+st.download_button(
+    label="Descargar Excel (agregados, match y conciliación)",
+    data=excel_bytes,
+    file_name="conciliacion_cartera.xlsx",
+    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+)
 
-        # Validar columnas necesarias
-        required_columns = ["Fecha Emisión", "Total", "IVA", "Tipo de documento", "Grupo"]
-        missing_columns = [col for col in required_columns if col not in df.columns]
-        if missing_columns:
-            st.error(f"El archivo no contiene las columnas requeridas: {', '.join(missing_columns)}")
-        else:
-            # Convertir 'Fecha Emisión' a formato de fecha
-            df["Fecha Emisión"] = pd.to_datetime(df["Fecha Emisión"], format='%d-%m-%Y', errors="coerce")
-            df["Total"] = pd.to_numeric(df["Total"], errors='coerce')
-            df["IVA"] = pd.to_numeric(df["IVA"], errors='coerce')
+# ---------------------------
+# Diagnóstico/Debug opcional
+# ---------------------------
+with st.expander("Diagnóstico de detecciones (opcional)"):
+    st.json({
+        "sheet_cierre": sheet_cierre,
+        "sheet_balance": sheet_balance,
+        "hdr1_idx": hdr1_idx,
+        "hdr2_idx": hdr2_idx,
+        "df1_apto_col_detected": apto_col_1_auto,
+        "df1_valor_cobro_col_detected": valor_cobro_col_auto,
+        "df2_nit_col_detected": nit_col_2_auto,
+        "df2_nuevo_saldo_col_detected": nuevo_saldo_col_auto,
+        "tolerance": tolerance,
+        "extract_strategy": extract_strategy,
+        "last_n": last_n,
+        "regex_pat": regex_pat,
+    })
 
-            # Crear columnas de bases
-            df["Base_Total"] = (df["Total"].fillna(0) - df["IVA"].fillna(0)).round(0)
-            df["Base_IVA"] = df["IVA"].fillna(0).round(0)
-
-            # Extraer mes en texto
-            month_mapping = {
-                1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
-                5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
-                9: "Septiembre", 10: "Octubre", 11: "Noviembre", 12: "Diciembre"
-            }
-            df["Mes"] = df["Fecha Emisión"].dt.month.map(month_mapping)
-            meses_orden = list(month_mapping.values())
-            df["Mes"] = pd.Categorical(df["Mes"], categories=meses_orden, ordered=True)
-
-            # Opción para seleccionar el tipo de análisis
-            analisis = st.radio(
-                "Selecciona el tipo de análisis",
-                ["Base con Total e IVA", "Base con solo IVA"]
-            )
-
-            # Configurar columna base según análisis
-            base_columna = "Base_Total" if analisis == "Base con Total e IVA" else "Base_IVA"
-
-            # Calcular tabla consolidada
-            tipo_documentos = df["Tipo de documento"].unique()
-            grados = ["Emitido", "Recibido"]
-            tabla_resultados = []
-            for tipo_doc in tipo_documentos:
-                for grado in grados:
-                    df_filtro = df[(df["Tipo de documento"] == tipo_doc) & (df["Grupo"] == grado)]
-                    suma_por_mes = df_filtro.groupby("Mes")[base_columna].sum().reindex(meses_orden, fill_value=0)
-                    total_anual = suma_por_mes.sum()
-                    fila = [tipo_doc, grado] + list(suma_por_mes.values) + [total_anual]
-                    tabla_resultados.append(fila)
-
-            columnas = ["Tipo Doc", "Grado"] + meses_orden + ["Total Anual"]
-            tabla_df = pd.DataFrame(tabla_resultados, columns=columnas).round(0)
-
-            # Mostrar tabla consolidada
-            st.markdown("### Tabla consolidada:")
-            st.dataframe(tabla_df)
-
-            # Botón para descargar el archivo Excel
-            st.markdown("### Descargar tabla en Excel")
-            excel_data = convertir_a_excel(tabla_df)
-            st.download_button(
-                label="Descargar tabla en Excel",
-                data=excel_data,
-                file_name="tabla_consolidada.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
-
-            # Gráfico principal: Línea del total mensual
-            st.markdown("### Gráfico: Evolución del total mensual")
-            total_por_mes = df.groupby("Mes")[base_columna].sum().reindex(meses_orden, fill_value=0)
-            total_por_mes_millones = total_por_mes // 1_000_000
-
-            fig_linea, ax_linea = plt.subplots(figsize=(10, 6))
-            ax_linea.plot(total_por_mes.index, total_por_mes_millones, marker='o', color='b', linestyle='-')
-            ax_linea.set_title("Evolución mensual (en millones de pesos)", fontsize=16)
-            ax_linea.set_xlabel("Mes", fontsize=12)
-            ax_linea.set_ylabel("Total (Millones de Pesos)", fontsize=12)
-            ax_linea.grid(True, linestyle='--', alpha=0.6)
-            ax_linea.set_xticks(range(len(meses_orden)))
-            ax_linea.set_xticklabels(meses_orden, rotation=45)
-
-            total_anual = total_por_mes.sum()
-            porcentajes = (total_por_mes / total_anual) * 100
-            for i, value in enumerate(total_por_mes_millones):
-                ax_linea.text(
-                    i, value,
-                    f"{int(value):,}M\n({int(porcentajes[i])}%)".replace(",", "."),
-                    ha='center', va='bottom', fontsize=10
-                )
-
-            ax_linea.yaxis.set_major_formatter(plt.FuncFormatter(lambda x, _: f"{int(x):,}".replace(",", ".")))
-            st.pyplot(fig_linea)
-
-            # Gráficos de barras por tipo de documento
-            st.markdown("### Gráficos de barras por tipo de documento")
-            for tipo_doc in tipo_documentos:
-                fig, axes = plt.subplots(1, 2, figsize=(16, 6), sharey=True)
-                fig.suptitle(f"Porcentaje relativo de {tipo_doc}", fontsize=16)
-
-                for ax, grado in zip(axes, grados):
-                    df_filtro = tabla_df[(tabla_df["Tipo Doc"] == tipo_doc) & (tabla_df["Grado"] == grado)]
-                    if not df_filtro.empty:
-                        porcentajes = (df_filtro[meses_orden].values.flatten() / df_filtro["Total Anual"].values[0]) * 100
-                        ax.bar(meses_orden, porcentajes, color='skyblue', width=0.6)
-                        ax.set_title(grado, fontsize=14)
-                        ax.set_xlabel("Mes", fontsize=12)
-                        ax.set_ylabel("Porcentaje (%)", fontsize=12)
-                        ax.set_ylim(0, 100)
-                        ax.set_xticks(range(len(meses_orden)))
-                        ax.set_xticklabels(meses_orden, rotation=45)
-
-                        for i, porcentaje in enumerate(porcentajes):
-                            ax.text(i, porcentaje + 1, f"{porcentaje:.0f}%", ha='center', va='bottom', fontsize=10)
-
-                st.pyplot(fig)
-
-    except Exception as e:
-        st.error(f"Error al procesar el archivo: {e}")
+st.caption("¿Apto 803 vuelve a dar diferencia? No es bug: es la realidad tocando la puerta 🧮🙂")
