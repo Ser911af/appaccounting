@@ -207,9 +207,41 @@ tolerance = TOLERANCE_DEFAULT
 df1["_valor_cobro_num"] = to_amount(df1[valor_cobro_col])
 df2["_nuevo_saldo_num"] = to_amount(df2[nuevo_saldo_col])
 
-# Clave piso-num
+# =========================
+# Clave piso-num con filtrado de valores no válidos
+# =========================
+def is_valid_apto_format(s: str) -> bool:
+    """Acepta solo formatos tipo 1-9803, 2-9901, etc. (no P205, no vacíos, no 999.999-1)"""
+    if pd.isna(s):
+        return False
+    text = str(s).strip()
+    # Solo acepta si es exactamente piso-num con 1 o 2 dígitos de piso y 3-5 de número
+    return bool(re.match(r"^\d{1,2}[-_/\.]\d{3,5}$", text))
+
+# Aplicar normalización y filtrar
 df1["_apto_key"] = df1[apto_cierre_col].apply(normalize_apto_key)
 df2["_apto_key"] = df2[apto_balance_col].apply(normalize_apto_key)
+
+# Filtrar out valores no válidos o vacíos
+df1 = df1[df1[apto_cierre_col].apply(is_valid_apto_format)]
+df2 = df2[df2[apto_balance_col].apply(is_valid_apto_format)]
+
+# =========================
+# Agregaciones
+# =========================
+g1 = (
+    df1.dropna(subset=["_apto_key"])
+       .groupby("_apto_key", as_index=False)
+       .agg(valor_cobro_sum=("_valor_cobro_num", "sum"),
+            conteo_registros=(apto_cierre_col, "count"))
+)
+
+g2 = (
+    df2.dropna(subset=["_apto_key"])
+       .groupby("_apto_key", as_index=False)
+       .agg(nuevo_saldo_sum=("_nuevo_saldo_num", "sum"))
+)
+
 
 # Agregaciones
 g1 = (
