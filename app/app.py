@@ -7,10 +7,11 @@ import re
 import io
 import unicodedata
 from typing import Optional, Tuple, List
+from pandas.api.types import is_string_dtype
 
 st.set_page_config(page_title="Conciliación de Cartera", layout="wide")
 st.title("Conciliación de Cartera: Cierre vs Balance por Terceros")
-st.caption("Sube un Excel con dos hojas (Cierre de Cartera y Balance/NIT). Detecto encabezados, mapeo columnas y genero la hoja 'conciliacion'.")
+st.caption("Sube un Excel con dos hojas (Cierre y Balance). Detecto encabezados, mapeo columnas y genero la hoja 'conciliacion'.")
 
 # ---------------------------
 # Utilidades
@@ -21,6 +22,20 @@ def normalize_text(s: str) -> str:
     s = str(s)
     s = "".join(c for c in unicodedata.normalize("NFD", s) if unicodedata.category(c) != "Mn")
     return s.lower().strip()
+
+def make_unique(names: List[str]) -> List[str]:
+    """Devuelve una lista de nombres únicos preservando orden: a, a -> a, a_1, a_2..."""
+    seen = {}
+    out = []
+    for n in names:
+        n = str(n)
+        if n not in seen:
+            seen[n] = 0
+            out.append(n)
+        else:
+            seen[n] += 1
+            out.append(f"{n}_{seen[n]}")
+    return out
 
 def find_header_row(df_raw: pd.DataFrame, must_have_any: List[str], must_have_optional: Optional[List[str]] = None) -> Optional[int]:
     if must_have_optional is None:
@@ -36,15 +51,20 @@ def find_header_row(df_raw: pd.DataFrame, must_have_any: List[str], must_have_op
     return best_row
 
 def build_table(df_raw: pd.DataFrame, header_row_idx: int) -> pd.DataFrame:
+    # 1) Leer encabezados
     headers = df_raw.iloc[header_row_idx].astype(str).tolist()
+    # 2) Rellenar vacíos/unnamed y hacer únicos
     headers = [h if normalize_text(h) not in ("", "unnamed: 0") else f"col_{i}" for i, h in enumerate(headers)]
+    headers = make_unique(headers)
+    # 3) Asignar datos y columnas
     data = df_raw.iloc[header_row_idx+1:].copy()
     data.columns = headers
+    # 4) Drop de filas totalmente vacías
     data = data.dropna(how="all")
-    # strip
-    for c in data.columns:
-        if data[c].dtype == object:
-            data[c] = data[c].astype(str).str.strip()
+    # 5) Limpiar espacios SOLO en columnas tipo object (robusto, sin usar .dtype directo sobre DataFrame)
+    obj_cols = list(data.select_dtypes(include=["object"]).columns)
+    for c in obj_cols:
+        data[c] = data[c].astype(str).str.strip()
     return data
 
 def find_col_fuzzy(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
@@ -118,7 +138,7 @@ elif extract_strategy == "Regex personalizada":
     regex_pat = st.sidebar.text_input("Patrón regex (ej. r'APTO\\s*(\\d{2,4})')", value=r"\d{2,6}")
 
 st.sidebar.markdown("---")
-st.sidebar.caption("TIP: Si tus encabezados están 'escondidos' más abajo, la app los busca por palabras clave y arma la tabla desde allí.")
+st.sidebar.caption("La app detecta encabezados por palabras clave aunque no estén en la fila 1.")
 
 # ---------------------------
 # Carga de archivo
@@ -129,9 +149,13 @@ if not uploaded:
     st.info("Sube un archivo para comenzar. La app espera dos hojas: una con **Cierre** (apartamento, valor cobro) y otra con **Balance** (NIT, nuevo saldo).")
     st.stop()
 
+# Intento de lectura del Excel
 try:
     xls = pd.ExcelFile(uploaded)
     sheet_names = xls.sheet_names
+    if len(sheet_names) < 2:
+        st.error("Se requieren al menos 2 hojas en el Excel.")
+        st.stop()
     st.success(f"Archivo detectado. Hojas: {', '.join(sheet_names)}")
 except Exception as e:
     st.error(f"No pude leer el Excel: {e}")
@@ -168,14 +192,29 @@ valor_cobro_col_auto = find_col_fuzzy(df1, ["valor cobro", "valor a cobrar", "va
 nit_col_2_auto = find_col_fuzzy(df2, ["nit", "identificacion", "id tercero", "tercero", "documento"])
 nuevo_saldo_col_auto = find_col_fuzzy(df2, ["nuevo saldo", "saldo nuevo", "saldo", "balance", "deuda", "cartera"])
 
+# Selección manual con defaults auto-detectados
 st.markdown("### Mapeo de columnas")
 c1, c2 = st.columns(2)
 with c1:
-    apto_col_1 = st.selectbox("Hoja Cierre: columna de nro apartamento", options=df1.columns.tolist(), index=(df1.columns.tolist().index(apto_col_1_auto) if apto_col_1_auto in df1.columns else 0))
-    valor_cobro_col = st.selectbox("Hoja Cierre: columna valor cobro", options=df1.columns.tolist(), index=(df1.columns.tolist().index(valor_cobro_col_auto) if valor_cobro_col_auto in df1.columns else 0))
+    apto_col_1 = st.selectbox("Hoja Cierre: columna de nro apartamento", options=df1.columns.tolist(),
+                               index=(df1.columns.tolist().index(apto_col_1_auto) if apto_col_1_auto in df1.columns else 0))
+    valor_cobro_col = st.selectbox("Hoja Cierre: columna valor cobro", options=df1.columns.tolist(),
+                                    index=(df1.columns.tolist().index(valor_cobro_col_auto) if valor_cobro_col_auto in df1.columns else 0))
 with c2:
-    nit_col_2 = st.selectbox("Hoja Balance: columna NIT / Tercero", options=df2.columns.tolist(), index=(df2.columns.tolist().index(nit_col_2_auto) if nit_col_2_auto in df2.columns else 0))
-    nuevo_saldo_col = st.selectbox("Hoja Balance: columna nuevo saldo", options=df2.columns.tolist(), index=(df2.columns.tolist().index(nuevo_saldo_col_auto) if nuevo_saldo_col_auto in df2.columns else 0))
+    nit_col_2 = st.selectbox("Hoja Balance: columna NIT / Tercero", options=df2.columns.tolist(),
+                              index=(df2.columns.tolist().index(nit_col_2_auto) if nit_col_2_auto in df2.columns else 0))
+    nuevo_saldo_col = st.selectbox("Hoja Balance: columna nuevo saldo", options=df2.columns.tolist(),
+                                    index=(df2.columns.tolist().index(nuevo_saldo_col_auto) if nuevo_saldo_col_auto in df2.columns else 0))
+
+# Validación de columnas seleccionadas
+missing = []
+for df_name, df_ref, col in [("Cierre", df1, apto_col_1), ("Cierre", df1, valor_cobro_col),
+                             ("Balance", df2, nit_col_2), ("Balance", df2, nuevo_saldo_col)]:
+    if col not in df_ref.columns:
+        missing.append(f"{df_name}: {col}")
+if missing:
+    st.error("Columnas seleccionadas no existen tras normalización de encabezados: " + ", ".join(missing))
+    st.stop()
 
 # ---------------------------
 # Transformaciones
@@ -184,9 +223,8 @@ with c2:
 df1["_valor_cobro_num"] = to_amount(df1[valor_cobro_col])
 df2["_nuevo_saldo_num"] = to_amount(df2[nuevo_saldo_col])
 
-# 2) Clave de apto en Hoja 1 (ya viene explícita)
+# 2) Clave de apto en Hoja 1 (explicita o embebida en texto)
 def parse_apto_from_df1(x):
-    # Permite que el nro de apto venga con texto; extrae la secuencia más larga
     matches = re.findall(r'\d+', str(x))
     if not matches:
         return None
@@ -256,17 +294,15 @@ with tabs[3]:
 def build_output_excel() -> bytes:
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as writer:
-        # Exporta todas las hojas útiles
         g1_export = g1.rename(columns={"_apto_num": "apto_num"})
         g2_export = g2.rename(columns={"_apto_num": "apto_num"})
         res_export = res.rename(columns={"_apto_num": "apto_num"})
         conciliacion_export = conciliacion.rename(columns={"_apto_num": "apto_num"})
-        # Limpiar decimales y dar formato (opcional)
+        # Redondeo suave
         for df_exp in (g1_export, g2_export, res_export, conciliacion_export):
             for c in df_exp.columns:
                 if df_exp[c].dtype.kind in "f":
                     df_exp[c] = df_exp[c].round(2)
-
         g1_export.to_excel(writer, sheet_name="agregado_hoja1", index=False)
         g2_export.to_excel(writer, sheet_name="agregado_hoja2", index=False)
         res_export.to_excel(writer, sheet_name="match_total", index=False)
@@ -301,4 +337,4 @@ with st.expander("Diagnóstico de detecciones (opcional)"):
         "regex_pat": regex_pat,
     })
 
-st.caption("¿Apto 803 vuelve a dar diferencia? No es bug: es la realidad tocando la puerta 🧮🙂")
+st.caption("Si el 803 sigue en rojo, no es bug: es la realidad tocando la puerta 🧮🙂")
