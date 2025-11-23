@@ -171,12 +171,16 @@ header_row_cierre_1based = st.number_input(
     min_value=1,
     max_value=int(len(raw_cierre)),
     value=1,
-    step=1
+    step=1,
+    key="fila_header_cierre"
 )
 header_row_cierre = int(header_row_cierre_1based) - 1
 
 df_cierre = build_table_from_row(raw_cierre, header_row_cierre)
 df_cierre = drop_all_empty_columns(df_cierre)
+
+st.markdown(f"#### Vista previa - Cierre (encabezados en fila {header_row_cierre_1based})")
+st.dataframe(df_cierre.head(20), use_container_width=True)
 
 # ---- Balance: leer sin encabezado y preguntar fila de header ----
 try:
@@ -193,7 +197,8 @@ header_row_balance_1based = st.number_input(
     min_value=1,
     max_value=int(len(raw_balance)),
     value=1,
-    step=1
+    step=1,
+    key="fila_header_balance"
 )
 header_row_balance = int(header_row_balance_1based) - 1
 
