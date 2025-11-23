@@ -125,8 +125,8 @@ def pick_amount_col(df: pd.DataFrame, prefer_keywords: List[str]) -> Optional[st
 # =========================
 # Parámetros fijos del caso
 # =========================
-SHEET_CIERRE = "CierreCartera"
-SHEET_BALANCE = "BALANCE 13452501"
+SHEET_CIERRE = "Cierre"
+SHEET_BALANCE = "Balance"
 HDR_CIERRE_IDX = 7   # fila 8 de Excel
 HDR_BALANCE_IDX = 2  # fila 3 de Excel
 TOLERANCE_DEFAULT = 0.01
