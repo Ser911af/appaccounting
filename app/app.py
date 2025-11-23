@@ -48,6 +48,37 @@ def to_amount(series: pd.Series) -> pd.Series:
     s = s.str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
     return pd.to_numeric(s, errors='coerce')
 
+def build_table_from_row(df_raw: pd.DataFrame, header_row_idx: int) -> pd.DataFrame:
+    """
+    Toma un DataFrame sin encabezados (header=None) y:
+    - Usa la fila header_row_idx como encabezados.
+    - Devuelve las filas por debajo como datos.
+    """
+    headers = df_raw.iloc[header_row_idx].astype(str).tolist()
+    # Rellenar encabezados vacíos o 'unnamed'
+    headers_norm = []
+    for i, h in enumerate(headers):
+        h_norm = normalize_text(h)
+        if h_norm in ("", "unnamed: 0", "nan"):
+            headers_norm.append(f"col_{i}")
+        else:
+            headers_norm.append(h)
+    # Asegurar unicidad
+    seen, unique_headers = {}, []
+    for h in headers_norm:
+        if h not in seen:
+            seen[h] = 0
+            unique_headers.append(h)
+        else:
+            seen[h] += 1
+            unique_headers.append(f"{h}_{seen[h]}")
+    data = df_raw.iloc[header_row_idx+1:].copy()
+    data.columns = unique_headers
+    data = data.dropna(how="all")
+    for c in list(data.select_dtypes(include=["object"]).columns):
+        data[c] = data[c].astype(str).str.strip()
+    return data
+
 APT_SEP_REGEX = r"[-_/\.]"
 PI_SO_NUM_SEARCH = re.compile(rf"(\d+)\s*{APT_SEP_REGEX}\s*(\d+)")
 
@@ -125,20 +156,54 @@ if not cierre_file or not balance_file:
     st.info("Sube ambos archivos (Cierre y Balance) para continuar.")
     st.stop()
 
+# ---- Cierre: leer sin encabezado y preguntar fila de header ----
 try:
-    df_cierre = pd.read_excel(cierre_file, dtype=str)
-    df_balance = pd.read_excel(balance_file, dtype=str)
+    raw_cierre = pd.read_excel(cierre_file, header=None, dtype=str)
 except Exception as e:
-    st.error(f"No pude leer uno de los archivos: {e}")
+    st.error(f"No pude leer el archivo de Cierre: {e}")
     st.stop()
 
+st.markdown("#### Vista previa - Cierre (sin encabezados)")
+st.dataframe(raw_cierre.head(20), use_container_width=True)
+
+header_row_cierre_1based = st.number_input(
+    "¿En qué fila están los encabezados del archivo Cierre? (1 = primera fila)",
+    min_value=1,
+    max_value=int(len(raw_cierre)),
+    value=1,
+    step=1
+)
+header_row_cierre = int(header_row_cierre_1based) - 1
+
+df_cierre = build_table_from_row(raw_cierre, header_row_cierre)
 df_cierre = drop_all_empty_columns(df_cierre)
+
+# ---- Balance: leer sin encabezado y preguntar fila de header ----
+try:
+    raw_balance = pd.read_excel(balance_file, header=None, dtype=str)
+except Exception as e:
+    st.error(f"No pude leer el archivo de Balance: {e}")
+    st.stop()
+
+st.markdown("#### Vista previa - Balance (sin encabezados)")
+st.dataframe(raw_balance.head(20), use_container_width=True)
+
+header_row_balance_1based = st.number_input(
+    "¿En qué fila están los encabezados del archivo Balance? (1 = primera fila)",
+    min_value=1,
+    max_value=int(len(raw_balance)),
+    value=1,
+    step=1
+)
+header_row_balance = int(header_row_balance_1based) - 1
+
+df_balance = build_table_from_row(raw_balance, header_row_balance)
 df_balance = drop_all_empty_columns(df_balance)
 
-with st.expander("Vista previa - Cierre"):
+with st.expander("Vista previa - Cierre (con encabezados)"):
     st.dataframe(df_cierre.head(20), use_container_width=True)
 
-with st.expander("Vista previa - Balance"):
+with st.expander("Vista previa - Balance (con encabezados)"):
     st.dataframe(df_balance.head(20), use_container_width=True)
 
 # =========================
@@ -146,11 +211,11 @@ with st.expander("Vista previa - Balance"):
 # =========================
 st.subheader("2. Configuración de Cierre (bloque, código y valor cobro)")
 
-# Sugerencia automática para Inmueble Código y Bloque
-auto_codigo_cierre = find_col_fuzzy(df_cierre, ["inmueble codigo", "codigo", "código"])
-auto_bloque_cierre = find_col_fuzzy(df_cierre, ["inmueble bloque", "bloque", "torre"])
-
 cols_cierre = list(df_cierre.columns)
+
+# Sugerencias para Inmueble Código y Bloque
+auto_codigo_cierre = find_col_fuzzy(df_cierre, ["inmueble codigo", "inmueble código", "codigo", "código"])
+auto_bloque_cierre = find_col_fuzzy(df_cierre, ["inmueble bloque", "bloque", "torre"])
 
 codigo_cierre_col = st.selectbox(
     "Columna Inmueble Código (Cierre)",
@@ -164,7 +229,7 @@ bloque_cierre_col = st.selectbox(
     index=cols_cierre.index(auto_bloque_cierre) if auto_bloque_cierre in cols_cierre else 0
 )
 
-# Sugerencia automática para Valor Cobro
+# Sugerencia para Valor Cobro
 auto_valor_cobro = pick_amount_col(
     df_cierre,
     ["valor cobro", "valor a cobrar", "valor cobrado", "cobro", "cuota", "facturado", "valor"]
@@ -183,25 +248,24 @@ codigo_raw = df_cierre[codigo_cierre_col].astype(str).str.extract(r"(\d{3,5})")[
 piso = bloque_raw.str.lstrip("0")
 piso = piso.replace("", np.nan)
 
-df_cierre["_apto_key"] = np.where(
+df_cierre["_apto_key_raw"] = np.where(
     piso.notna() & codigo_raw.notna(),
     piso + "-" + codigo_raw,
     np.nan
 )
-
-df_cierre["_apto_key_norm"] = df_cierre["_apto_key"].apply(normalize_apto_key)
+df_cierre["_apto_key"] = df_cierre["_apto_key_raw"].apply(normalize_apto_key)
 
 # Montos Cierre
 df_cierre["_valor_cobro_num"] = to_amount(df_cierre[valor_cobro_col])
 
 # Filtramos rows con clave válida
-df_cierre_valid = df_cierre[df_cierre["_apto_key_norm"].apply(is_valid_apto_format)].copy()
+df_cierre_valid = df_cierre[df_cierre["_apto_key"].apply(is_valid_apto_format)].copy()
 
 # Agregado Cierre por apartamento
 g_cierre = (
     df_cierre_valid
-    .dropna(subset=["_apto_key_norm"])
-    .groupby("_apto_key_norm", as_index=False)
+    .dropna(subset=["_apto_key"])
+    .groupby("_apto_key", as_index=False)
     .agg(
         valor_cobro_sum=("_valor_cobro_num", "sum"),
         conteo_registros=(codigo_cierre_col, "count")
@@ -276,7 +340,7 @@ g_balance = (
     .groupby("_apto_key", as_index=False)
     .agg(
         nuevo_saldo_1345_sum=("_nuevo_saldo_1345_num", "sum"),
-        conteo_registros=("Cuenta" if "Cuenta" in df_balance_valid.columns else cuenta_col, "count")
+        conteo_registros=(cuenta_col, "count")
     )
 )
 
@@ -285,9 +349,7 @@ g_balance = (
 # =========================
 st.subheader("4. Conciliación Cierre vs Balance")
 
-# Renombramos claves para el merge
-g_cierre_ren = g_cierre.rename(columns={"_apto_key_norm": "_apto_key"})
-res = pd.merge(g_cierre_ren, g_balance, on="_apto_key", how="outer")
+res = pd.merge(g_cierre, g_balance, on="_apto_key", how="outer")
 
 res["valor_cobro_sum"] = res["valor_cobro_sum"].fillna(0.0)
 res["nuevo_saldo_1345_sum"] = res["nuevo_saldo_1345_sum"].fillna(0.0)
@@ -304,7 +366,7 @@ st.markdown("### Resultados")
 
 m1, m2, m3, m4 = st.columns(4)
 with m1:
-    st.metric("Aptos en Cierre", int(g_cierre_ren.shape[0]))
+    st.metric("Aptos en Cierre", int(g_cierre.shape[0]))
 with m2:
     st.metric("Aptos en Balance (1345*)", int(g_balance.shape[0]))
 with m3:
@@ -321,7 +383,7 @@ with tabs[1]:
     st.dataframe(res.sort_values("_apto_key").reset_index(drop=True), use_container_width=True)
 
 with tabs[2]:
-    st.dataframe(g_cierre_ren.sort_values("_apto_key").reset_index(drop=True), use_container_width=True)
+    st.dataframe(g_cierre.sort_values("_apto_key").reset_index(drop=True), use_container_width=True)
 
 with tabs[3]:
     st.dataframe(g_balance.sort_values("_apto_key").reset_index(drop=True), use_container_width=True)
@@ -329,7 +391,7 @@ with tabs[3]:
 def build_output_excel() -> bytes:
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as w:
-        g_cierre_ren.rename(columns={"_apto_key": "apto_key"}).to_excel(w, "agregado_cierre", index=False)
+        g_cierre.rename(columns={"_apto_key": "apto_key"}).to_excel(w, "agregado_cierre", index=False)
         g_balance.rename(columns={"_apto_key": "apto_key"}).to_excel(w, "agregado_balance", index=False)
         res.rename(columns={"_apto_key": "apto_key"}).to_excel(w, "match_total", index=False)
         conciliacion.rename(columns={"_apto_key": "apto_key"}).to_excel(w, "conciliacion", index=False)
@@ -346,15 +408,17 @@ st.download_button(
 with st.expander("Diagnóstico (columnas seleccionadas/detectadas)"):
     st.json({
         "cierre": {
+            "fila_encabezado": int(header_row_cierre_1based),
             "codigo_cierre_col": codigo_cierre_col,
             "bloque_cierre_col": bloque_cierre_col,
             "valor_cobro_col": valor_cobro_col,
         },
         "balance": {
+            "fila_encabezado": int(header_row_balance_1based),
             "apto_balance_col": apto_balance_col,
             "nuevo_saldo_col": nuevo_saldo_col,
             "cuenta_col": cuenta_col,
         }
     })
 
-st.caption("Cierre vs Balance por apto, sumando solo cuentas 1345* como Ingresos por Cobrar. Si algo no cuadra, revisamos el 803… o la parametrización 😏.")
+st.caption("Cierre vs Balance por apto, sumando solo cuentas 1345* como Ingresos por Cobrar. Si algo no cuadra, es el 803… o el encabezado mal escogido 😏.")
