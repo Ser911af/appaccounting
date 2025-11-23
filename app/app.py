@@ -189,7 +189,10 @@ TOLERANCE_DEFAULT = 0.01
 # =========================
 # Carga de archivo
 # =========================
-uploaded = st.file_uploader("Sube tu Excel (debe contener 'CierreCartera' y 'BALANCE 13452501')", type=["xlsx"])
+uploaded = st.file_uploader(
+    "Sube tu Excel (debe contener 'CierreCartera' y 'BALANCE 13452501')",
+    type=["xlsx"]
+)
 if not uploaded:
     st.info("Sube el archivo para continuar. Este flujo está fijado a esas 2 hojas y filas de encabezado.")
     st.stop()
@@ -199,7 +202,10 @@ try:
     sheet_names = xls.sheet_names
     missing = [s for s in [SHEET_CIERRE, SHEET_BALANCE] if s not in sheet_names]
     if missing:
-        st.error(f"No encuentro estas hojas requeridas: {', '.join(missing)}.\nHojas disponibles: {', '.join(sheet_names)}")
+        st.error(
+            f"No encuentro estas hojas requeridas: {', '.join(missing)}.\n"
+            f"Hojas disponibles: {', '.join(sheet_names)}"
+        )
         st.stop()
 except Exception as e:
     st.error(f"No pude leer el Excel: {e}")
@@ -225,6 +231,7 @@ with st.expander("Vista previa (Balance)"):
 # =========================
 # Detección automática de columnas
 # =========================
+
 # 1) Cierre: columna piso-num (apto) y columna valor cobro
 apto_cierre_col = pick_apto_col_by_pattern(df1)
 
@@ -252,11 +259,29 @@ valor_cobro_col = pick_amount_col(
     ["valor cobro", "valor a cobrar", "valor cobrado", "cobro", "cuota", "facturado", "valor"]
 )
 
-# 2) Balance: columna piso-num (puede ser NIT o Nombre NIT) y columna nuevo saldo
+# 2) Balance: columna piso-num (puede ser NIT o Nombre NIT) y columna Nuevo Saldo
+
+# Columna de apto / identificador
 apto_balance_col = pick_apto_col_by_pattern(df2)
 if apto_balance_col is None:
-    apto_balance_col = find_col_fuzzy(df2, ["nit", "nombre", "apto", "apart", "unidad", "inmueble"])
-nuevo_saldo_col = pick_amount_col(df2, ["nuevo saldo", "saldo nuevo", "saldo final", "saldo", "balance", "cartera", "deuda"])
+    apto_balance_col = find_col_fuzzy(
+        df2,
+        ["nit", "nombre", "apto", "apart", "unidad", "inmueble"]
+    )
+
+# Columna de monto: PRIORIDAD ABSOLUTA a "Nuevo Saldo"
+nuevo_saldo_col = None
+for col in df2.columns:
+    if normalize_text(col) == "nuevo saldo":
+        nuevo_saldo_col = col
+        break
+
+# Si no encontramos exactamente "Nuevo Saldo", caemos al heurístico
+if nuevo_saldo_col is None:
+    nuevo_saldo_col = pick_amount_col(
+        df2,
+        ["nuevo saldo", "saldo nuevo", "saldo final", "saldo", "balance", "cartera", "deuda"]
+    )
 
 chosen = {
     "apto_cierre_col": apto_cierre_col,
@@ -275,7 +300,7 @@ st.info(
     f"- Cierre (apto): **{apto_cierre_col}**\n"
     f"- Cierre (valor cobro): **{valor_cobro_col}**\n"
     f"- Balance (apto): **{apto_balance_col}**\n"
-    f"- Balance (nuevo saldo): **{nuevo_saldo_col}**"
+    f"- Balance (Nuevo Saldo): **{nuevo_saldo_col}**"
 )
 
 # =========================
