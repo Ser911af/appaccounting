@@ -164,23 +164,23 @@ except Exception as e:
     st.stop()
 
 st.markdown("#### Vista previa - Cierre (sin encabezados)")
-st.dataframe(raw_cierre.head(20), use_container_width=True)
+
+preview_cierre = raw_cierre.head(30).copy()
+preview_cierre.index = preview_cierre.index + 1  # mostrar filas desde 1
+st.dataframe(preview_cierre, use_container_width=True)
 
 header_row_cierre_1based = st.number_input(
-    "¿En qué fila están los encabezados del archivo Cierre? (1 = primera fila)",
+    "¿En qué fila están los encabezados del archivo Cierre? (usa el número de la izquierda)",
     min_value=1,
     max_value=int(len(raw_cierre)),
     value=1,
     step=1,
     key="fila_header_cierre"
 )
-header_row_cierre = int(header_row_cierre_1based) - 1
+header_row_cierre = int(header_row_cierre_1based) - 1  # convertir a índice 0-based
 
 df_cierre = build_table_from_row(raw_cierre, header_row_cierre)
 df_cierre = drop_all_empty_columns(df_cierre)
-
-st.markdown(f"#### Vista previa - Cierre (encabezados en fila {header_row_cierre_1based})")
-st.dataframe(df_cierre.head(20), use_container_width=True)
 
 # ---- Balance: leer sin encabezado y preguntar fila de header ----
 try:
@@ -190,26 +190,23 @@ except Exception as e:
     st.stop()
 
 st.markdown("#### Vista previa - Balance (sin encabezados)")
-st.dataframe(raw_balance.head(20), use_container_width=True)
+
+preview_balance = raw_balance.head(30).copy()
+preview_balance.index = preview_balance.index + 1  # mostrar filas desde 1
+st.dataframe(preview_balance, use_container_width=True)
 
 header_row_balance_1based = st.number_input(
-    "¿En qué fila están los encabezados del archivo Balance? (1 = primera fila)",
+    "¿En qué fila están los encabezados del archivo Balance? (usa el número de la izquierda)",
     min_value=1,
     max_value=int(len(raw_balance)),
     value=1,
     step=1,
     key="fila_header_balance"
 )
-header_row_balance = int(header_row_balance_1based) - 1
+header_row_balance = int(header_row_balance_1based) - 1  # convertir a índice 0-based
 
 df_balance = build_table_from_row(raw_balance, header_row_balance)
 df_balance = drop_all_empty_columns(df_balance)
-
-with st.expander("Vista previa - Cierre (con encabezados)"):
-    st.dataframe(df_cierre.head(20), use_container_width=True)
-
-with st.expander("Vista previa - Balance (con encabezados)"):
-    st.dataframe(df_balance.head(20), use_container_width=True)
 
 # =========================
 # 2. Configuración Cierre
@@ -410,7 +407,7 @@ st.download_button(
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 )
 
-with st.expander("Diagnóstico (columnas seleccionadas/detectadas)"):
+with st.expander("Diagnóstico (configuración usada)"):
     st.json({
         "cierre": {
             "fila_encabezado": int(header_row_cierre_1based),
@@ -426,4 +423,4 @@ with st.expander("Diagnóstico (columnas seleccionadas/detectadas)"):
         }
     })
 
-st.caption("Cierre vs Balance por apto, sumando solo cuentas 1345* como Ingresos por Cobrar. Si algo no cuadra, es el 803… o el encabezado mal escogido 😏.")
+st.caption("Cierre vs Balance por apto, sumando solo cuentas 1345* como Ingresos por Cobrar. Ahora las filas del preview son 1-based: lo que ves es lo que escribes 😎.")
