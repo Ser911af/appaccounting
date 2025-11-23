@@ -50,12 +50,9 @@ def to_amount(series: pd.Series) -> pd.Series:
 
 def build_table_from_row(df_raw: pd.DataFrame, header_row_idx: int) -> pd.DataFrame:
     """
-    Toma un DataFrame sin encabezados (header=None) y:
-    - Usa la fila header_row_idx como encabezados.
-    - Devuelve las filas por debajo como datos.
+    Usa la fila `header_row_idx` como encabezados y devuelve el resto como datos.
     """
     headers = df_raw.iloc[header_row_idx].astype(str).tolist()
-    # Rellenar encabezados vacíos o 'unnamed'
     headers_norm = []
     for i, h in enumerate(headers):
         h_norm = normalize_text(h)
@@ -63,6 +60,7 @@ def build_table_from_row(df_raw: pd.DataFrame, header_row_idx: int) -> pd.DataFr
             headers_norm.append(f"col_{i}")
         else:
             headers_norm.append(h)
+
     # Asegurar unicidad
     seen, unique_headers = {}, []
     for h in headers_norm:
@@ -72,6 +70,7 @@ def build_table_from_row(df_raw: pd.DataFrame, header_row_idx: int) -> pd.DataFr
         else:
             seen[h] += 1
             unique_headers.append(f"{h}_{seen[h]}")
+
     data = df_raw.iloc[header_row_idx+1:].copy()
     data.columns = unique_headers
     data = data.dropna(how="all")
@@ -149,28 +148,24 @@ def pick_amount_col(df: pd.DataFrame, prefer_keywords: List[str]) -> Optional[st
 # =========================
 st.subheader("1. Carga de archivos")
 
-cierre_file = st.file_uploader("Archivo de Cierre", type=["xlsx"], key="cierre")
-balance_file = st.file_uploader("Archivo de Balance", type=["xlsx"], key="balance")
+cierre_file = st.file_uploader("📥 Archivo de Cierre", type=["xlsx"], key="cierre")
+balance_file = st.file_uploader("📥 Archivo de Balance", type=["xlsx"], key="balance")
 
 if not cierre_file or not balance_file:
     st.info("Sube ambos archivos (Cierre y Balance) para continuar.")
     st.stop()
 
-# ---- Cierre: leer sin encabezado y preguntar fila de header ----
+# ---- Cierre: leer sin encabezado y seleccionar fila de header ----
 try:
     raw_cierre = pd.read_excel(cierre_file, header=None, dtype=str)
 except Exception as e:
     st.error(f"No pude leer el archivo de Cierre: {e}")
     st.stop()
 
-st.markdown("#### Vista previa - Cierre (sin encabezados)")
-
-preview_cierre = raw_cierre.head(30).copy()
-preview_cierre.index = preview_cierre.index + 1  # mostrar filas desde 1
-st.dataframe(preview_cierre, use_container_width=True)
+st.markdown("### 🏢 Cierre – selecciona la fila de encabezados")
 
 header_row_cierre_1based = st.number_input(
-    "¿En qué fila están los encabezados del archivo Cierre? (usa el número de la izquierda)",
+    "Fila de encabezados en Cierre (1 = primera fila):",
     min_value=1,
     max_value=int(len(raw_cierre)),
     value=1,
@@ -182,21 +177,20 @@ header_row_cierre = int(header_row_cierre_1based) - 1  # convertir a índice 0-b
 df_cierre = build_table_from_row(raw_cierre, header_row_cierre)
 df_cierre = drop_all_empty_columns(df_cierre)
 
-# ---- Balance: leer sin encabezado y preguntar fila de header ----
+st.caption("Vista previa de Cierre con los encabezados aplicados según la fila seleccionada:")
+st.dataframe(df_cierre.head(20), use_container_width=True)
+
+# ---- Balance: leer sin encabezado y seleccionar fila de header ----
 try:
     raw_balance = pd.read_excel(balance_file, header=None, dtype=str)
 except Exception as e:
     st.error(f"No pude leer el archivo de Balance: {e}")
     st.stop()
 
-st.markdown("#### Vista previa - Balance (sin encabezados)")
-
-preview_balance = raw_balance.head(30).copy()
-preview_balance.index = preview_balance.index + 1  # mostrar filas desde 1
-st.dataframe(preview_balance, use_container_width=True)
+st.markdown("### 📊 Balance – selecciona la fila de encabezados")
 
 header_row_balance_1based = st.number_input(
-    "¿En qué fila están los encabezados del archivo Balance? (usa el número de la izquierda)",
+    "Fila de encabezados en Balance (1 = primera fila):",
     min_value=1,
     max_value=int(len(raw_balance)),
     value=1,
@@ -207,6 +201,9 @@ header_row_balance = int(header_row_balance_1based) - 1  # convertir a índice 0
 
 df_balance = build_table_from_row(raw_balance, header_row_balance)
 df_balance = drop_all_empty_columns(df_balance)
+
+st.caption("Vista previa de Balance con los encabezados aplicados según la fila seleccionada:")
+st.dataframe(df_balance.head(20), use_container_width=True)
 
 # =========================
 # 2. Configuración Cierre
@@ -423,4 +420,4 @@ with st.expander("Diagnóstico (configuración usada)"):
         }
     })
 
-st.caption("Cierre vs Balance por apto, sumando solo cuentas 1345* como Ingresos por Cobrar. Ahora las filas del preview son 1-based: lo que ves es lo que escribes 😎.")
+st.caption("Cierre vs Balance por apto, sumando solo cuentas 1345* como Ingresos por Cobrar. Ahora la vista previa se actualiza cada vez que cambias la fila de encabezado 🧠📊.")
