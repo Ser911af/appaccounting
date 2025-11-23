@@ -50,9 +50,12 @@ def to_amount(series: pd.Series) -> pd.Series:
 
 def build_table_from_row(df_raw: pd.DataFrame, header_row_idx: int) -> pd.DataFrame:
     """
-    Usa la fila `header_row_idx` como encabezados y devuelve el resto como datos.
+    Toma un DataFrame sin encabezados (header=None) y:
+    - Usa la fila header_row_idx como encabezados.
+    - Devuelve las filas por debajo como datos.
     """
     headers = df_raw.iloc[header_row_idx].astype(str).tolist()
+    # Rellenar encabezados vacíos o 'unnamed'
     headers_norm = []
     for i, h in enumerate(headers):
         h_norm = normalize_text(h)
@@ -60,7 +63,6 @@ def build_table_from_row(df_raw: pd.DataFrame, header_row_idx: int) -> pd.DataFr
             headers_norm.append(f"col_{i}")
         else:
             headers_norm.append(h)
-
     # Asegurar unicidad
     seen, unique_headers = {}, []
     for h in headers_norm:
@@ -70,7 +72,6 @@ def build_table_from_row(df_raw: pd.DataFrame, header_row_idx: int) -> pd.DataFr
         else:
             seen[h] += 1
             unique_headers.append(f"{h}_{seen[h]}")
-
     data = df_raw.iloc[header_row_idx+1:].copy()
     data.columns = unique_headers
     data = data.dropna(how="all")
@@ -148,62 +149,64 @@ def pick_amount_col(df: pd.DataFrame, prefer_keywords: List[str]) -> Optional[st
 # =========================
 st.subheader("1. Carga de archivos")
 
-cierre_file = st.file_uploader("📥 Archivo de Cierre", type=["xlsx"], key="cierre")
-balance_file = st.file_uploader("📥 Archivo de Balance", type=["xlsx"], key="balance")
+cierre_file = st.file_uploader("📄 Archivo de Cierre", type=["xlsx"], key="cierre")
+balance_file = st.file_uploader("📄 Archivo de Balance", type=["xlsx"], key="balance")
 
 if not cierre_file or not balance_file:
     st.info("Sube ambos archivos (Cierre y Balance) para continuar.")
     st.stop()
 
-# ---- Cierre: leer sin encabezado y seleccionar fila de header ----
+# ---- Cierre: leer sin encabezado ----
 try:
     raw_cierre = pd.read_excel(cierre_file, header=None, dtype=str)
 except Exception as e:
     st.error(f"No pude leer el archivo de Cierre: {e}")
     st.stop()
 
-st.markdown("### 🏢 Cierre – selecciona la fila de encabezados")
-
+st.markdown("### 🧩 Cierre – Paso 1: indica la fila donde están los encabezados")
 header_row_cierre_1based = st.number_input(
-    "Fila de encabezados en Cierre (1 = primera fila):",
+    "Fila de encabezados en el archivo **Cierre** (usa el número de la izquierda de la tabla):",
     min_value=1,
     max_value=int(len(raw_cierre)),
     value=1,
     step=1,
     key="fila_header_cierre"
 )
-header_row_cierre = int(header_row_cierre_1based) - 1  # convertir a índice 0-based
+header_row_cierre = int(header_row_cierre_1based) - 1  # 0-based interno
 
 df_cierre = build_table_from_row(raw_cierre, header_row_cierre)
 df_cierre = drop_all_empty_columns(df_cierre)
 
-st.caption("Vista previa de Cierre con los encabezados aplicados según la fila seleccionada:")
-st.dataframe(df_cierre.head(20), use_container_width=True)
+st.markdown(f"#### Vista previa - Cierre (aplicando fila {header_row_cierre_1based} como encabezados)")
+preview_cierre = df_cierre.head(30).copy()
+preview_cierre.index = preview_cierre.index + 1  # mostrar filas desde 1
+st.dataframe(preview_cierre, use_container_width=True)
 
-# ---- Balance: leer sin encabezado y seleccionar fila de header ----
+# ---- Balance: leer sin encabezado ----
 try:
     raw_balance = pd.read_excel(balance_file, header=None, dtype=str)
 except Exception as e:
     st.error(f"No pude leer el archivo de Balance: {e}")
     st.stop()
 
-st.markdown("### 📊 Balance – selecciona la fila de encabezados")
-
+st.markdown("### 🧩 Balance – Paso 1: indica la fila donde están los encabezados")
 header_row_balance_1based = st.number_input(
-    "Fila de encabezados en Balance (1 = primera fila):",
+    "Fila de encabezados en el archivo **Balance** (usa el número de la izquierda de la tabla):",
     min_value=1,
     max_value=int(len(raw_balance)),
     value=1,
     step=1,
     key="fila_header_balance"
 )
-header_row_balance = int(header_row_balance_1based) - 1  # convertir a índice 0-based
+header_row_balance = int(header_row_balance_1based) - 1  # 0-based interno
 
 df_balance = build_table_from_row(raw_balance, header_row_balance)
 df_balance = drop_all_empty_columns(df_balance)
 
-st.caption("Vista previa de Balance con los encabezados aplicados según la fila seleccionada:")
-st.dataframe(df_balance.head(20), use_container_width=True)
+st.markdown(f"#### Vista previa - Balance (aplicando fila {header_row_balance_1based} como encabezados)")
+preview_balance = df_balance.head(30).copy()
+preview_balance.index = preview_balance.index + 1
+st.dataframe(preview_balance, use_container_width=True)
 
 # =========================
 # 2. Configuración Cierre
@@ -217,13 +220,13 @@ auto_codigo_cierre = find_col_fuzzy(df_cierre, ["inmueble codigo", "inmueble có
 auto_bloque_cierre = find_col_fuzzy(df_cierre, ["inmueble bloque", "bloque", "torre"])
 
 codigo_cierre_col = st.selectbox(
-    "Columna Inmueble Código (Cierre)",
+    "Columna **Inmueble Código** (Cierre)",
     options=cols_cierre,
     index=cols_cierre.index(auto_codigo_cierre) if auto_codigo_cierre in cols_cierre else 0
 )
 
 bloque_cierre_col = st.selectbox(
-    "Columna Inmueble Bloque (Cierre)",
+    "Columna **Inmueble Bloque** (Cierre)",
     options=cols_cierre,
     index=cols_cierre.index(auto_bloque_cierre) if auto_bloque_cierre in cols_cierre else 0
 )
@@ -235,7 +238,7 @@ auto_valor_cobro = pick_amount_col(
 )
 
 valor_cobro_col = st.selectbox(
-    "Columna Valor Cobro (Cierre)",
+    "Columna **Valor Cobro** (Cierre)",
     options=cols_cierre,
     index=cols_cierre.index(auto_valor_cobro) if auto_valor_cobro in cols_cierre else 0
 )
@@ -284,7 +287,7 @@ if auto_apto_balance is None:
     auto_apto_balance = find_col_fuzzy(df_balance, ["nit", "nombre nit", "apto", "apart", "unidad", "inmueble"])
 
 apto_balance_col = st.selectbox(
-    "Columna clave de apartamento (Balance, ej. NIT con 1-101)",
+    "Columna **clave de apartamento** (Balance, ej. NIT con 1-101)",
     options=cols_balance,
     index=cols_balance.index(auto_apto_balance) if auto_apto_balance in cols_balance else 0
 )
@@ -296,7 +299,7 @@ auto_nuevo_saldo = next(
 )
 
 nuevo_saldo_col = st.selectbox(
-    "Columna Nuevo Saldo (Balance)",
+    "Columna **Nuevo Saldo** (Balance)",
     options=cols_balance,
     index=cols_balance.index(auto_nuevo_saldo) if auto_nuevo_saldo in cols_balance else 0
 )
@@ -304,7 +307,7 @@ nuevo_saldo_col = st.selectbox(
 # Columna Cuenta (para filtrar 1345*)
 auto_cuenta = find_col_fuzzy(df_balance, ["cuenta", "codigo", "código", "cod"])
 cuenta_col = st.selectbox(
-    "Columna Cuenta (Balance, para cuentas 1345*)",
+    "Columna **Cuenta** (Balance, para cuentas 1345*)",
     options=cols_balance,
     index=cols_balance.index(auto_cuenta) if auto_cuenta in cols_balance else 0
 )
@@ -420,4 +423,4 @@ with st.expander("Diagnóstico (configuración usada)"):
         }
     })
 
-st.caption("Cierre vs Balance por apto, sumando solo cuentas 1345* como Ingresos por Cobrar. Ahora la vista previa se actualiza cada vez que cambias la fila de encabezado 🧠📊.")
+st.caption("Cierre vs Balance por apto, sumando solo cuentas 1345* como Ingresos por Cobrar. La fila que escribes = la fila que ves 😉.")
