@@ -122,6 +122,61 @@ def pick_amount_col(df: pd.DataFrame, prefer_keywords: List[str]) -> Optional[st
             best_col = col
     return best_col
 
+def synthesize_apto_from_block_and_code(
+    df: pd.DataFrame,
+    code_cols: List[str],
+    block_cols: List[str],
+    new_col_name: str = "_apto_sintetico"
+) -> Optional[str]:
+    """
+    Intenta crear una columna tipo 'piso-num' (1-9801) combinando:
+    - columna de código (ej: 'Inmueble Código' -> 9801)
+    - columna de bloque/piso (ej: 'Inmueble Bloque' -> 01 -> 1)
+
+    Devuelve el nombre de la nueva columna si logra generar
+    suficientes valores válidos, si no devuelve None.
+    """
+    for code_col in code_cols:
+        for block_col in block_cols:
+            if code_col in df.columns and block_col in df.columns:
+                # extraemos dígitos numéricos
+                bloque_raw = df[block_col].astype(str).str.extract(r"(\d+)")[0]
+                codigo_raw = df[code_col].astype(str).str.extract(r"(\d{3,5})")[0]
+
+                # piso = bloque sin ceros a la izquierda (01 -> 1)
+                piso = bloque_raw.str.lstrip("0")
+                piso = piso.replace("", np.nan)
+
+                df[new_col_name] = np.where(
+                    piso.notna() & codigo_raw.notna(),
+                    piso + "-" + codigo_raw,
+                    np.nan
+                )
+
+                # medimos cuántos valores realmente matchean el patrón piso-num
+                hits = (
+                    df[new_col_name]
+                    .dropna()
+                    .astype(str)
+                    .apply(lambda x: 1 if PI_SO_NUM_SEARCH.search(x) else 0)
+                    .sum()
+                )
+                if hits > 0:
+                    # hay al menos algunos aptos válidos -> usamos esta columna
+                    return new_col_name
+
+                # si no funcionó, limpiamos y probamos otra combinación
+                df.drop(columns=[new_col_name], inplace=True, errors="ignore")
+
+    return None
+
+def col_has_piso_num_pattern(df: pd.DataFrame, col: Optional[str]) -> bool:
+    if col is None or col not in df.columns:
+        return False
+    s = df[col].dropna().astype(str).head(300)
+    hits = s.apply(lambda x: 1 if PI_SO_NUM_SEARCH.search(x) else 0).sum()
+    return hits > 0
+
 # =========================
 # Parámetros fijos del caso
 # =========================
@@ -172,10 +227,30 @@ with st.expander("Vista previa (Balance)"):
 # =========================
 # 1) Cierre: columna piso-num (apto) y columna valor cobro
 apto_cierre_col = pick_apto_col_by_pattern(df1)
+
 if apto_cierre_col is None:
-    # fallback por nombre
-    apto_cierre_col = find_col_fuzzy(df1, ["apto", "apart", "nro", "numero", "inmueble"])
-valor_cobro_col = pick_amount_col(df1, ["valor cobro", "valor a cobrar", "valor cobrado", "cobro", "cuota", "facturado", "valor"])
+    # fallback por nombre (por si sigue existiendo algo tipo 'NRO APTOS', 'Apto', etc.)
+    apto_cierre_col = find_col_fuzzy(
+        df1,
+        ["apto", "apart", "nro", "numero", "inmueble"]
+    )
+
+# Si NO tenemos una columna con valores tipo '1-9803',
+# intentamos sintetizarla a partir de Inmueble Bloque + Inmueble Código
+if not col_has_piso_num_pattern(df1, apto_cierre_col):
+    synthesized = synthesize_apto_from_block_and_code(
+        df1,
+        code_cols=["Inmueble Código", "inmueble codigo", "codigo"],
+        block_cols=["Inmueble Bloque", "bloque"],
+        new_col_name="_apto_sintetico_cierre"
+    )
+    if synthesized is not None:
+        apto_cierre_col = synthesized
+
+valor_cobro_col = pick_amount_col(
+    df1,
+    ["valor cobro", "valor a cobrar", "valor cobrado", "cobro", "cuota", "facturado", "valor"]
+)
 
 # 2) Balance: columna piso-num (puede ser NIT o Nombre NIT) y columna nuevo saldo
 apto_balance_col = pick_apto_col_by_pattern(df2)
@@ -191,12 +266,17 @@ chosen = {
 }
 
 # Validación de detección
-missing_cols = [k for k, v in chosen.items() if v is None or v not in (list(df1.columns) + list(df2.columns))]
 if any(chosen[k] is None for k in chosen):
     st.error(f"No pude detectar todas las columnas necesarias automáticamente.\nDetecciones: {chosen}")
     st.stop()
 
-st.info(f"Columnas detectadas automáticamente:\n- Cierre (apto): **{apto_cierre_col}**\n- Cierre (valor cobro): **{valor_cobro_col}**\n- Balance (apto): **{apto_balance_col}**\n- Balance (nuevo saldo): **{nuevo_saldo_col}**")
+st.info(
+    f"Columnas detectadas automáticamente:\n"
+    f"- Cierre (apto): **{apto_cierre_col}**\n"
+    f"- Cierre (valor cobro): **{valor_cobro_col}**\n"
+    f"- Balance (apto): **{apto_balance_col}**\n"
+    f"- Balance (nuevo saldo): **{nuevo_saldo_col}**"
+)
 
 # =========================
 # Conciliación automática
@@ -232,29 +312,18 @@ df2 = df2[df2[apto_balance_col].apply(is_valid_apto_format)]
 g1 = (
     df1.dropna(subset=["_apto_key"])
        .groupby("_apto_key", as_index=False)
-       .agg(valor_cobro_sum=("_valor_cobro_num", "sum"),
-            conteo_registros=(apto_cierre_col, "count"))
+       .agg(
+           valor_cobro_sum=("_valor_cobro_num", "sum"),
+           conteo_registros=(apto_cierre_col, "count")
+       )
 )
 
 g2 = (
     df2.dropna(subset=["_apto_key"])
        .groupby("_apto_key", as_index=False)
-       .agg(nuevo_saldo_sum=("_nuevo_saldo_num", "sum"))
-)
-
-
-# Agregaciones
-g1 = (
-    df1.dropna(subset=["_apto_key"])
-       .groupby("_apto_key", as_index=False)
-       .agg(valor_cobro_sum=("_valor_cobro_num", "sum"),
-            conteo_registros=(apto_cierre_col, "count"))
-)
-
-g2 = (
-    df2.dropna(subset=["_apto_key"])
-       .groupby("_apto_key", as_index=False)
-       .agg(nuevo_saldo_sum=("_nuevo_saldo_num", "sum"))
+       .agg(
+           nuevo_saldo_sum=("_nuevo_saldo_num", "sum")
+       )
 )
 
 # Join y diferencia
@@ -271,16 +340,24 @@ conciliacion = res[res["diferencia"].abs() > tolerance].sort_values("_apto_key")
 # =========================
 st.markdown("### Resultados")
 m1, m2, m3, m4 = st.columns(4)
-with m1: st.metric("Aptos en Cierre", int(g1.shape[0]))
-with m2: st.metric("Aptos en Balance", int(g2.shape[0]))
-with m3: st.metric("Coincidencias (outer join)", int(res.shape[0]))
-with m4: st.metric("Diferencias ≠ 0", int(conciliacion.shape[0]))
+with m1:
+    st.metric("Aptos en Cierre", int(g1.shape[0]))
+with m2:
+    st.metric("Aptos en Balance", int(g2.shape[0]))
+with m3:
+    st.metric("Coincidencias (outer join)", int(res.shape[0]))
+with m4:
+    st.metric("Diferencias ≠ 0", int(conciliacion.shape[0]))
 
 tabs = st.tabs(["Conciliación", "Match Total", "Agregado Cierre", "Agregado Balance"])
-with tabs[0]: st.dataframe(conciliacion.reset_index(drop=True), use_container_width=True)
-with tabs[1]: st.dataframe(res.sort_values("_apto_key").reset_index(drop=True), use_container_width=True)
-with tabs[2]: st.dataframe(g1.sort_values("_apto_key").reset_index(drop=True), use_container_width=True)
-with tabs[3]: st.dataframe(g2.sort_values("_apto_key").reset_index(drop=True), use_container_width=True)
+with tabs[0]:
+    st.dataframe(conciliacion.reset_index(drop=True), use_container_width=True)
+with tabs[1]:
+    st.dataframe(res.sort_values("_apto_key").reset_index(drop=True), use_container_width=True)
+with tabs[2]:
+    st.dataframe(g1.sort_values("_apto_key").reset_index(drop=True), use_container_width=True)
+with tabs[3]:
+    st.dataframe(g2.sort_values("_apto_key").reset_index(drop=True), use_container_width=True)
 
 def build_output_excel() -> bytes:
     output = io.BytesIO()
