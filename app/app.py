@@ -347,10 +347,11 @@ g_balance = (
 )
 
 # =========================
-# 4. Match y conciliación
+# 4. Match, discrepancias y conciliación
 # =========================
 st.subheader("4. Conciliación Cierre vs Balance")
 
+# Join principal
 res = pd.merge(g_cierre, g_balance, on="_apto_key", how="outer")
 
 res["valor_cobro_sum"] = res["valor_cobro_sum"].fillna(0.0)
@@ -361,8 +362,40 @@ res["diferencia"] = res["valor_cobro_sum"] - res["nuevo_saldo_1345_sum"]
 tolerance = 0.01
 conciliacion = res[res["diferencia"].abs() > tolerance].sort_values("_apto_key")
 
+# -------- Discrepancias de presencia (solo Cierre / solo Balance / ambos) --------
+keys_cierre = set(g_cierre["_apto_key"])
+keys_balance = set(g_balance["_apto_key"])
+
+only_cierre_keys = sorted(keys_cierre - keys_balance)
+only_balance_keys = sorted(keys_balance - keys_cierre)
+both_keys = sorted(keys_cierre & keys_balance)
+
+solo_cierre_df = res[
+    res["_apto_key"].isin(only_cierre_keys)
+].sort_values("_apto_key")
+
+solo_balance_df = res[
+    res["_apto_key"].isin(only_balance_keys)
+].sort_values("_apto_key")
+
+# -------- Clasificación de diferencias (sobre conciliacion) --------
+cobro_sin_saldo = conciliacion[
+    (conciliacion["valor_cobro_sum"] != 0) &
+    (conciliacion["nuevo_saldo_1345_sum"] == 0)
+]
+
+saldo_sin_cobro = conciliacion[
+    (conciliacion["valor_cobro_sum"] == 0) &
+    (conciliacion["nuevo_saldo_1345_sum"] != 0)
+]
+
+ambos_con_diferencia = conciliacion[
+    (conciliacion["valor_cobro_sum"] != 0) &
+    (conciliacion["nuevo_saldo_1345_sum"] != 0)
+]
+
 # =========================
-# 5. Resultados y descarga
+# 5. Resultados y tablas
 # =========================
 st.markdown("### Resultados")
 
@@ -376,7 +409,30 @@ with m3:
 with m4:
     st.metric("Diferencias ≠ 0", int(conciliacion.shape[0]))
 
-tabs = st.tabs(["Conciliación", "Match Total", "Agregado Cierre", "Agregado Balance"])
+m5, m6, m7 = st.columns(3)
+with m5:
+    st.metric("Aptos SOLO en Cierre", len(only_cierre_keys))
+with m6:
+    st.metric("Aptos SOLO en Balance (1345*)", len(only_balance_keys))
+with m7:
+    st.metric("Aptos en ambos", len(both_keys))
+
+m8, m9, m10 = st.columns(3)
+with m8:
+    st.metric("Cobro > 0 y Saldo 1345 = 0", int(cobro_sin_saldo.shape[0]))
+with m9:
+    st.metric("Saldo 1345 > 0 y Cobro = 0", int(saldo_sin_cobro.shape[0]))
+with m10:
+    st.metric("Ambos > 0 pero diferentes", int(ambos_con_diferencia.shape[0]))
+
+tabs = st.tabs([
+    "Conciliación",
+    "Match Total",
+    "Solo Cierre",
+    "Solo Balance (1345*)",
+    "Agregado Cierre",
+    "Agregado Balance",
+])
 
 with tabs[0]:
     st.dataframe(conciliacion.reset_index(drop=True), use_container_width=True)
@@ -385,11 +441,20 @@ with tabs[1]:
     st.dataframe(res.sort_values("_apto_key").reset_index(drop=True), use_container_width=True)
 
 with tabs[2]:
-    st.dataframe(g_cierre.sort_values("_apto_key").reset_index(drop=True), use_container_width=True)
+    st.dataframe(solo_cierre_df.reset_index(drop=True), use_container_width=True)
 
 with tabs[3]:
+    st.dataframe(solo_balance_df.reset_index(drop=True), use_container_width=True)
+
+with tabs[4]:
+    st.dataframe(g_cierre.sort_values("_apto_key").reset_index(drop=True), use_container_width=True)
+
+with tabs[5]:
     st.dataframe(g_balance.sort_values("_apto_key").reset_index(drop=True), use_container_width=True)
 
+# =========================
+# 6. Descarga de Excel
+# =========================
 def build_output_excel() -> bytes:
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="xlsxwriter") as w:
@@ -397,30 +462,47 @@ def build_output_excel() -> bytes:
         g_balance.rename(columns={"_apto_key": "apto_key"}).to_excel(w, "agregado_balance", index=False)
         res.rename(columns={"_apto_key": "apto_key"}).to_excel(w, "match_total", index=False)
         conciliacion.rename(columns={"_apto_key": "apto_key"}).to_excel(w, "conciliacion", index=False)
+        solo_cierre_df.rename(columns={"_apto_key": "apto_key"}).to_excel(w, "solo_cierre", index=False)
+        solo_balance_df.rename(columns={"_apto_key": "apto_key"}).to_excel(w, "solo_balance", index=False)
     return output.getvalue()
 
 st.markdown("### Descargar resultados")
 st.download_button(
-    "Descargar Excel (agregados, match y conciliación)",
+    "Descargar Excel (agregados, match, discrepancias)",
     data=build_output_excel(),
     file_name="conciliacion_cartera.xlsx",
     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
 )
 
-with st.expander("Diagnóstico (configuración usada)"):
-    st.json({
-        "cierre": {
-            "fila_encabezado": int(header_row_cierre_1based),
-            "codigo_cierre_col": codigo_cierre_col,
-            "bloque_cierre_col": bloque_cierre_col,
-            "valor_cobro_col": valor_cobro_col,
-        },
-        "balance": {
-            "fila_encabezado": int(header_row_balance_1based),
-            "apto_balance_col": apto_balance_col,
-            "nuevo_saldo_col": nuevo_saldo_col,
-            "cuenta_col": cuenta_col,
-        }
-    })
+# =========================
+# 7. Mini reporte en línea
+# =========================
+total_cierre = int(g_cierre.shape[0])
+total_balance = int(g_balance.shape[0])
+total_union = int(res.shape[0])
+total_diff = int(conciliacion.shape[0])
 
-st.caption("Cierre vs Balance por apto, sumando solo cuentas 1345* como Ingresos por Cobrar. La fila que escribes = la fila que ves 😉.")
+st.markdown("### 📝 Resumen automático de la conciliación")
+
+reporte = f"""
+- Se encontraron **{total_cierre}** apartamentos en el archivo de **Cierre**.
+- Se encontraron **{total_balance}** apartamentos en el archivo de **Balance (cuentas 1345\*)**.
+- El universo combinado (outer join) es de **{total_union}** apartamentos.
+
+- Hay **{len(only_cierre_keys)}** apartamentos que solo aparecen en **Cierre** (cobro sin registro de saldo 1345).
+- Hay **{len(only_balance_keys)}** apartamentos que solo aparecen en **Balance** con cuentas 1345\* (saldo contable sin cobro en el Cierre).
+- Hay **{len(both_keys)}** apartamentos que aparecen en **ambos** archivos.
+
+- En total, hay **{total_diff}** apartamentos con diferencias significativas entre:
+  - la suma de **Valor Cobro** (Cierre) y
+  - la suma de **Nuevo Saldo 1345\*** (Balance).
+
+Detalle de las diferencias:
+- **{int(cobro_sin_saldo.shape[0])}** apartamentos tienen **cobro > 0** pero **saldo 1345 = 0**.
+- **{int(saldo_sin_cobro.shape[0])}** apartamentos tienen **saldo 1345 > 0** pero **cobro = 0**.
+- **{int(ambos_con_diferencia.shape[0])}** apartamentos tienen **cobro y saldo 1345 > 0**, pero los montos no coinciden.
+"""
+
+st.markdown(reporte)
+
+st.caption("Lectura rápida: los aptos solo en Balance indican cartera contable sin cobro en el Cierre; los solo en Cierre indican cobro sin cartera 1345; y las diferencias ≠ 0 apuntan a desajustes de monto, periodo o imputación.")
