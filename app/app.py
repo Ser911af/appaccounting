@@ -79,15 +79,20 @@ def build_table_from_row(df_raw: pd.DataFrame, header_row_idx: int) -> pd.DataFr
         data[c] = data[c].astype(str).str.strip()
     return data
 
+# Patrón estricto: solo acepta valores COMPLETOS tipo "1-9801", "2/0103", etc.
 APT_SEP_REGEX = r"[-_/\.]"
-PI_SO_NUM_SEARCH = re.compile(rf"(\d+)\s*{APT_SEP_REGEX}\s*(\d+)")
+PI_SO_NUM_FULL = re.compile(rf"^\s*(\d{{1,2}})\s*{APT_SEP_REGEX}\s*(\d{{3,5}})\s*$")
 
 def normalize_apto_key(s: str) -> Optional[str]:
-    """Extrae y normaliza clave tipo piso-num (1-9801) de un string."""
+    """
+    Extrae y normaliza clave tipo piso-num (1-9801) de un string,
+    SOLO si el string completo corresponde a ese formato.
+    No extrae trozos dentro de NITs como '43.202.550-3'.
+    """
     if pd.isna(s):
         return None
     text = str(s).strip()
-    m = PI_SO_NUM_SEARCH.search(text)
+    m = PI_SO_NUM_FULL.match(text)
     if not m:
         return None
     piso = int(m.group(1))
@@ -95,11 +100,11 @@ def normalize_apto_key(s: str) -> Optional[str]:
     return f"{piso}-{num}"
 
 def is_valid_apto_format(s: str) -> bool:
-    """Acepta solo formatos tipo 1-9803, 2-9901, etc."""
+    """Acepta solo formatos tipo 1-9803, 2-9901, etc. usando el patrón estricto."""
     if pd.isna(s):
         return False
     text = str(s).strip()
-    return bool(re.match(r"^\d{1,2}[-_/\.]\d{3,5}$", text))
+    return bool(PI_SO_NUM_FULL.match(text))
 
 def find_col_fuzzy(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
     """Encuentra la columna cuyo nombre se parece más a la lista de keywords."""
@@ -115,17 +120,19 @@ def find_col_fuzzy(df: pd.DataFrame, candidates: List[str]) -> Optional[str]:
 def pick_apto_col_by_pattern(df: pd.DataFrame) -> Optional[str]:
     """
     Selecciona la mejor columna que contenga valores tipo 'piso-num' (1-9803),
-    puntuando por cantidad de matches regex en las primeras filas no vacías.
+    usando el patrón estricto (match completo).
+    Evita confundir NITs como '43.202.550-3' con claves de apto.
     """
     best_col, best_hits = None, -1
-    sample_n = min(200, len(df))
+    sample_n = min(300, len(df))
     for col in df.columns:
         s = df[col].dropna().astype(str).head(sample_n)
-        hits = s.apply(lambda x: 1 if PI_SO_NUM_SEARCH.search(x) else 0).sum()
+        hits = s.apply(lambda x: 1 if is_valid_apto_format(x) else 0).sum()
         if hits > best_hits:
             best_hits = hits
             best_col = col
-    return best_col
+    # Si no hay prácticamente hits, devolvemos None
+    return best_col if best_hits > 0 else None
 
 def pick_amount_col(df: pd.DataFrame, prefer_keywords: List[str]) -> Optional[str]:
     """
@@ -284,10 +291,10 @@ cols_balance = list(df_balance.columns)
 # Columna de clave apto en Balance
 auto_apto_balance = pick_apto_col_by_pattern(df_balance)
 if auto_apto_balance is None:
-    auto_apto_balance = find_col_fuzzy(df_balance, ["nit", "nombre nit", "apto", "apart", "unidad", "inmueble"])
+    auto_apto_balance = find_col_fuzzy(df_balance, ["apto", "apart", "unidad", "inmueble", "nit", "nombre nit"])
 
 apto_balance_col = st.selectbox(
-    "Columna **clave de apartamento** (Balance, ej. NIT con 1-101)",
+    "Columna **clave de apartamento** (Balance, idealmente 1-101, 2-203, etc.)",
     options=cols_balance,
     index=cols_balance.index(auto_apto_balance) if auto_apto_balance in cols_balance else 0
 )
@@ -312,7 +319,7 @@ cuenta_col = st.selectbox(
     index=cols_balance.index(auto_cuenta) if auto_cuenta in cols_balance else 0
 )
 
-# Clave apartamento en Balance
+# Clave apartamento en Balance (usando patrón estricto)
 df_balance["_apto_key"] = df_balance[apto_balance_col].apply(normalize_apto_key)
 df_balance["_apto_key_valid"] = df_balance["_apto_key"].apply(is_valid_apto_format)
 
@@ -505,4 +512,7 @@ Detalle de las diferencias:
 
 st.markdown(reporte)
 
-st.caption("Lectura rápida: los aptos solo en Balance indican cartera contable sin cobro en el Cierre; los solo en Cierre indican cobro sin cartera 1345; y las diferencias ≠ 0 apuntan a desajustes de monto, periodo o imputación.")
+st.caption(
+    "Con el patrón estricto de clave de apartamento evitamos confundir NITs como '43.202.550-3' con aptos tipo '43-202'. "
+    "Lo que queda como 'Solo Balance' ahora sí deberían ser casos reales de cartera sin cobro."
+)
