@@ -1,105 +1,105 @@
-# AccountEase
-# AccountEase: Aplicación de Análisis Contable
+# Conciliación de Cartera: Cierre vs Balance
 
-AccountEase es una aplicación web diseñada para contadores que analiza reportes proporcionados por la DIAN. A partir de un archivo Excel con una estructura predefinida, la herramienta automatiza cálculos y genera reportes personalizados que son descargables.
+Herramienta Streamlit para conciliar la cartera de apartamentos entre dos fuentes contables: el reporte de **Cierre** y el **Balance** de cuentas 1345\*.
 
-## Características
+## Qué hace
 
-- **Cálculo Automático**: Realiza cálculos como la columna `Base` restando `IVA` a `Total`.
-- **Análisis Dinámico**: Filtra y agrupa los datos según `Tipo de documento` y `Grado`.
-- **Reportes Mensuales**: Genera tablas con la suma de la columna `Base` organizada por meses.
-- **Descarga Fácil**: Permite descargar la tabla consolidada en formato Excel.
+1. Carga dos archivos Excel (Cierre y Balance) con estructura variable.
+2. Permite indicar en qué fila están los encabezados de cada archivo.
+3. Detecta automáticamente las columnas relevantes (código, bloque, valor cobro, nuevo saldo, cuenta).
+4. Construye una clave única por apartamento en formato `piso-número` (ej. `1-9801`, `2-203`) combinando las columnas de Bloque y Código del Cierre.
+5. En el Balance filtra únicamente las cuentas que empiezan con `1345*`.
+6. Hace un outer join por clave de apartamento y calcula la diferencia entre el Valor Cobro (Cierre) y el Nuevo Saldo 1345 (Balance).
+7. Muestra métricas, tablas detalladas por categoría y permite descargar todos los resultados en Excel.
 
-## Requisitos del Sistema
+## Estructura del proyecto
 
-- Python 3.9 o superior.
-- Entorno virtual configurado (opcional pero recomendado).
+```
+appaccounting/
+├── app/
+│   └── app.py          # Lógica principal de la app
+├── requirements.txt
+└── README.md
+```
 
-### Dependencias
+## Dependencias
 
-Las siguientes librerías son necesarias para ejecutar la aplicación:
+```
+streamlit
+pandas
+openpyxl
+xlsxwriter
+numpy
+```
 
-- `streamlit`
-- `pandas`
-- `openpyxl`
+Instalar:
 
-Puedes instalarlas ejecutando:
 ```bash
 pip install -r requirements.txt
 ```
 
-## Estructura del Proyecto
+## Cómo ejecutar
 
-```plaintext
-/workspaces/AccountEase
-├── app
-│   └── app.py         # Código principal de la aplicación
-├── data
-│   └── example.xlsx   # Archivo de ejemplo para pruebas
-├── requirements.txt   # Lista de dependencias
-└── README.md          # Documentación del proyecto
+```bash
+streamlit run app/app.py
 ```
 
-## Cómo Ejecutar la Aplicación
+La app queda disponible en `http://localhost:8501`.
 
-1. Clona este repositorio:
-   ```bash
-   git clone https://github.com/tu-usuario/AccountEase.git
-   cd AccountEase
-   ```
+## Flujo de uso
 
-2. Crea un entorno virtual e instálalo:
-   ```bash
-   python -m venv venv
-   source venv/bin/activate   # En Windows: venv\Scripts\activate
-   pip install -r requirements.txt
-   ```
+### Paso 1 — Cargar archivos
+Sube el archivo de **Cierre** y el de **Balance** (ambos `.xlsx`).
 
-3. Ejecuta la aplicación:
-   ```bash
-   streamlit run app/app.py
-   ```
+### Paso 2 — Indicar fila de encabezados
+Cada archivo puede tener filas de título o metadatos antes de los encabezados reales. Indica el número de fila donde están los nombres de columna. La vista previa se actualiza en tiempo real.
 
-4. Abre tu navegador en la URL proporcionada (por defecto: `http://localhost:8501`).
+### Paso 3 — Revisar columnas del Cierre
+La app sugiere automáticamente:
+- **Inmueble Código**: número del apartamento dentro del bloque.
+- **Inmueble Bloque**: número del bloque o torre.
+- **Valor Cobro**: monto facturado/cobrado.
 
-## Uso
+Si la sugerencia es incorrecta, cámbiala en el selector.
 
-1. **Carga de Archivo**: Sube el archivo Excel proporcionado por la DIAN.
-2. **Análisis Automático**: La aplicación procesa los datos y genera un reporte basado en:
-   - `Tipo de documento`
-   - `Grado` (Emitido o Recibido)
-   - Sumas mensuales de la columna `Base`.
-3. **Descarga del Reporte**: Descarga la tabla consolidada en formato Excel.
+### Paso 4 — Revisar columnas del Balance
+La app sugiere:
+- **Clave de apartamento**: columna con valores tipo `1-101`, `2-203`.
+- **Nuevo Saldo**: saldo contable del apartamento.
+- **Cuenta**: columna de código contable (se filtran solo las que empiezan con `1345`).
 
-### Formato de la Tabla Generada
-La tabla consolidada tiene el siguiente formato:
+### Paso 5 — Ver resultados
+Las métricas muestran de un vistazo:
 
-| Tipo Doc     | Grado      | Enero | Febrero | ... | Diciembre | Total |
-|--------------|------------|-------|---------|-----|-----------|-------|
-| Factura      | Emitido    | 1000  | 2000    | ... | 1500      | 5500  |
-| Factura      | Recibido   | 500   | 800     | ... | 400       | 1700  |
-| Nota Crédito | Emitido    | 300   | 600     | ... | 200       | 1100  |
+| Métrica | Descripción |
+|---|---|
+| Aptos en Cierre | Total de apartamentos con clave válida en el Cierre |
+| Aptos en Balance (1345\*) | Total en Balance con cuentas 1345\* |
+| Diferencias ≠ 0 | Aptos donde Cierre ≠ Balance |
+| Solo en Cierre | Cobros sin saldo contable registrado |
+| Solo en Balance | Saldo contable sin cobro en Cierre |
+| Cobro > 0 y Saldo = 0 | Cobrado pero sin contrapartida 1345 |
+| Saldo > 0 y Cobro = 0 | Saldo 1345 sin cobro |
+| Ambos > 0 pero diferentes | Discrepancia de montos |
 
-## Contribuciones
+Las tablas detalladas están organizadas en pestañas:
+- **Conciliación**: solo los apartamentos con diferencia.
+- **Match Total**: el outer join completo.
+- **Solo Cierre / Solo Balance**: apartamentos que no cruzan.
+- **Agregado Cierre / Balance**: totales por apartamento antes del join.
 
-Si deseas contribuir:
+### Paso 6 — Descargar Excel
+El botón al final descarga un `.xlsx` con una hoja por cada tabla (agregado_cierre, agregado_balance, match_total, conciliacion, solo_cierre, solo_balance).
 
-1. Crea un fork del proyecto.
-2. Crea una rama para tu feature/bugfix:
-   ```bash
-   git checkout -b feature-nombre
-   ```
-3. Realiza tus cambios y haz un commit.
-4. Envía un pull request.
+## Lógica de clave de apartamento
 
-## Licencia
+La clave se construye como `piso-número`, por ejemplo `2-9803`.
 
-Este proyecto está bajo la licencia MIT. Consulta el archivo LICENSE para más detalles.
+- En el **Cierre**: se extrae el número del Bloque (= piso) y el Código del apartamento y se concatenan.
+- En el **Balance**: se busca una columna que ya contenga ese formato directamente.
+- El patrón es estricto: solo acepta valores cuya totalidad sea `{1-2 dígitos}{separador}{3-5 dígitos}` para evitar confundir NITs como `43.202.550-3` con claves de apto.
 
-## Contacto
+## Notas
 
-Para consultas o soporte, puedes contactarme en:
-- **Email**: tuemail@example.com
-- **GitHub**: [Tu Usuario](https://github.com/tu-usuario)
-
-¡Gracias por usar AccountEase!
+- La tolerancia de diferencia es `0.01` (se ignoran diferencias menores a $0.01).
+- Los montos soportan formato colombiano con punto como separador de miles y coma como decimal (ej. `1.234.567,89`).
